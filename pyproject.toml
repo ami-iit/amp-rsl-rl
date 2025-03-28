@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61.0", "setuptools_scm"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "amp-rsl-rl"
+description = "A reinforcement learning library extension for AMP based on PPO of RSL-RL."
+authors = [
+    { name = "Giulio Romualdi", email = "email@email.com" },
+    { name = "Giuseppe L'Erario", email = "email@email.com" }
+]
+license = { file = "LICENSE" }
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "numpy",
+    "scipy",
+    "torch",
+    "rsl-rl-lib",
+]
+dynamic = ["version"]
+
+[tool.setuptools_scm]
+local_scheme = "dirty-tag"
