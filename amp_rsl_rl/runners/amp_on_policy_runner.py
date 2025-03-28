@@ -243,9 +243,8 @@ class AMPOnPolicyRunner:
                 self.writer = WandbSummaryWriter(
                     log_dir=self.log_dir, flush_secs=10, cfg=self.cfg
                 )
-                # wandb.init(project=project, entity=entity, monitor_gym=True)
-                import wandb
 
+                import wandb
                 wandb.gym.monitor()
                 self.writer.log_config(
                     self.env.cfg, self.cfg, self.alg_cfg, self.policy_cfg

@@ -7,6 +7,6 @@
 """Utilities for amp"""
 
 from .utils import Normalizer, RunningMeanStd
-from .motion_loader import MotionLoader
+from .motion_loader import MotionLoader, AMPLoader
 
-__all__ = ["Normalizer", "RunningMeanStd", "MotionLoader"]
+__all__ = ["Normalizer", "RunningMeanStd", "MotionLoader", "AMPLoader"]
