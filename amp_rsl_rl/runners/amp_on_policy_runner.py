@@ -245,6 +245,7 @@ class AMPOnPolicyRunner:
                 )
 
                 import wandb
+
                 wandb.gym.monitor()
                 self.writer.log_config(
                     self.env.cfg, self.cfg, self.alg_cfg, self.policy_cfg
