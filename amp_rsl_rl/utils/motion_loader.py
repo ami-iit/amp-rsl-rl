@@ -16,7 +16,10 @@ from scipy.interpolate import interp1d
 
 
 def download_amp_dataset_from_hf(
-    destination_dir: Path, robot_folder: str, files: list
+    destination_dir: Path,
+    robot_folder: str,
+    files: list,
+    repo_id: str = "ami-iit/amp-dataset",
 ) -> list:
     """
     Downloads AMP dataset files from Hugging Face and saves them to `destination_dir`.
@@ -26,14 +29,13 @@ def download_amp_dataset_from_hf(
         destination_dir (Path): Local directory to save the files.
         robot_folder (str): Folder in the Hugging Face dataset repo to pull from.
         files (list): List of filenames to download.
+        repo_id (str): Hugging Face repository ID. Default is "ami-iit/amp-dataset".
 
     Returns:
         List[str]: List of dataset names (without .npy extension).
     """
 
     from huggingface_hub import hf_hub_download
-
-    repo_id = "ami-iit/amp-dataset"
 
     destination_dir.mkdir(parents=True, exist_ok=True)
 
