@@ -6,7 +6,7 @@
 
 """Utilities for amp"""
 
-from .utils import Normalizer, RunningMeanStd, download_amp_dataset
+from .utils import Normalizer, RunningMeanStd, download_amp_dataset_from_hf
 from .motion_loader import AMPLoader
 
-__all__ = ["Normalizer", "RunningMeanStd", "AMPLoader", "download_amp_dataset"]
+__all__ = ["Normalizer", "RunningMeanStd", "AMPLoader", "download_amp_dataset_from_hf"]

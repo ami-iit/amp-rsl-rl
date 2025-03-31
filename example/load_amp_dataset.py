@@ -8,7 +8,7 @@ from pathlib import Path
 import os
 import shutil
 import tempfile
-from amp_rsl_rl.utils import AMPLoader, download_amp_dataset
+from amp_rsl_rl.utils import AMPLoader, download_amp_dataset_from_hf
 import torch
 
 # Configuration
@@ -24,7 +24,7 @@ files = [
 # Create temporary directory for dataset
 with tempfile.TemporaryDirectory() as tmpdirname:
     local_dir = Path(tmpdirname)
-    dataset_names = download_amp_dataset(local_dir, robot_folder=robot_folder, files=files)
+    dataset_names = download_amp_dataset_from_hf(local_dir, robot_folder=robot_folder, files=files)
 
 
     # Use AMPLoader to load and process the dataset

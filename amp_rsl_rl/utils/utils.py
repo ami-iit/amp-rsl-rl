@@ -150,7 +150,7 @@ from pathlib import Path
 import os
 
 
-def download_amp_dataset(destination_dir: Path, robot_folder: str, files: list) -> list:
+def download_amp_dataset_from_hf(destination_dir: Path, robot_folder: str, files: list) -> list:
     """
     Downloads AMP dataset files from Hugging Face and saves them to `destination_dir`.
     Ensures real file copies (not symlinks or hard links).
