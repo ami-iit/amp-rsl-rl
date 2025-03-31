@@ -143,3 +143,45 @@ class Normalizer(RunningMeanStd):
             self.update(
                 torch.vstack(tuple(policy_batch) + tuple(expert_batch)).cpu().numpy()
             )
+
+
+from huggingface_hub import hf_hub_download
+from pathlib import Path
+import os
+
+
+def download_amp_dataset(destination_dir: Path, robot_folder: str, files: list) -> list:
+    """
+    Downloads AMP dataset files from Hugging Face and saves them to `destination_dir`.
+    Ensures real file copies (not symlinks or hard links).
+
+    Args:
+        destination_dir (Path): Local directory to save the files.
+        robot_folder (str): Folder in the Hugging Face dataset repo to pull from.
+        files (list): List of filenames to download.
+
+    Returns:
+        List[str]: List of dataset names (without .npy extension).
+    """
+    repo_id = "ami-iit/amp-dataset"
+
+    destination_dir.mkdir(parents=True, exist_ok=True)
+
+    dataset_names = []
+    for file in files:
+        file_path = hf_hub_download(
+            repo_id=repo_id,
+            filename=f"{robot_folder}/{file}",
+            repo_type="dataset",
+            local_files_only=False,
+        )
+        local_copy = destination_dir / file
+
+        # Deep copy to avoid symlinks
+        with open(file_path, "rb") as src_file:
+            with open(local_copy, "wb") as dst_file:
+                dst_file.write(src_file.read())
+
+        dataset_names.append(file.replace(".npy", ""))
+
+    return dataset_names
