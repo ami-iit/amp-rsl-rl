@@ -145,9 +145,7 @@ class Normalizer(RunningMeanStd):
             )
 
 
-from huggingface_hub import hf_hub_download
-from pathlib import Path
-import os
+
 
 
 def download_amp_dataset_from_hf(destination_dir: Path, robot_folder: str, files: list) -> list:
@@ -163,6 +161,10 @@ def download_amp_dataset_from_hf(destination_dir: Path, robot_folder: str, files
     Returns:
         List[str]: List of dataset names (without .npy extension).
     """
+
+    from huggingface_hub import hf_hub_download
+    from pathlib import Path
+
     repo_id = "ami-iit/amp-dataset"
 
     destination_dir.mkdir(parents=True, exist_ok=True)
