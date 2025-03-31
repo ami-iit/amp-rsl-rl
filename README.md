@@ -80,10 +80,16 @@ All lists must have the same number of entries (i.e. one per frame). The dataset
 
 ---
 
+## 📚 Supported Dataset
+
+For a ready-to-use motion capture dataset, you can use the [AMP Dataset on Hugging Face](https://huggingface.co/datasets/ami-iit/amp-dataset). This dataset is curated to work seamlessly with the AMP-RSL-RL framework.
+
+---
+
 ## 🧑‍💻 Authors
 
-- **Giulio Romualdi** – @GiulioRomualdi 
-- **Giuseppe L'Erario** – @Giulero
+- **Giulio Romualdi** – [@GiulioRomualdi](https://github.com/GiulioRomualdi)
+- **Giuseppe L'Erario** – [@Giulero](https://github.com/Giulero)
 
 ---
 
