@@ -9,27 +9,22 @@ from __future__ import annotations
 import os
 import statistics
 import time
-import rsl_rl.utils
-import torch
 from collections import deque
+
+import torch
 from torch.utils.tensorboard import SummaryWriter as TensorboardSummaryWriter
 
 import rsl_rl
+import rsl_rl.utils
+from rsl_rl.env import VecEnv
+from rsl_rl.modules import ActorCritic, ActorCriticRecurrent, EmpiricalNormalization
+from rsl_rl.utils import store_code_state
+
 from amp_rsl_rl.utils import Normalizer
 from amp_rsl_rl.utils import AMPLoader
 from amp_rsl_rl.algorithms import AMP_PPO
 from amp_rsl_rl.networks import Discriminator
-
-from isaaclab_rl.rsl_rl import (
-    export_policy_as_onnx,
-)
-
-from rsl_rl.env import VecEnv
-
-from rsl_rl.modules import ActorCritic, ActorCriticRecurrent, EmpiricalNormalization
-
-
-from rsl_rl.utils import store_code_state
+from amp_rsl_rl.utils import export_policy_as_onnx
 
 
 class AMPOnPolicyRunner:
