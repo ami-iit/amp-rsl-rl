@@ -503,13 +503,24 @@ class AMPOnPolicyRunner:
             #   f"""{'Mean episode length/episode:':>{pad}} {locs['mean_trajectory_length']:.2f}\n""")
 
         log_string += ep_string
+
+        # make the eta in H:M:S
+        eta_seconds = (
+            self.tot_time
+            / (locs["it"] + 1)
+            * (locs["num_learning_iterations"] - locs["it"])
+        )
+
+        # Convert seconds to H:M:S
+        eta_h, rem = divmod(eta_seconds, 3600)
+        eta_m, eta_s = divmod(rem, 60)
+
         log_string += (
             f"""{'-' * width}\n"""
             f"""{'Total timesteps:':>{pad}} {self.tot_timesteps}\n"""
             f"""{'Iteration time:':>{pad}} {iteration_time:.2f}s\n"""
             f"""{'Total time:':>{pad}} {self.tot_time:.2f}s\n"""
-            f"""{'ETA:':>{pad}} {self.tot_time / (locs['it'] + 1) * (
-                               locs['num_learning_iterations'] - locs['it']):.1f}s\n"""
+            f"""{'ETA:':>{pad}} {int(eta_h)}h {int(eta_m)}m {int(eta_s)}s\n"""
         )
         print(log_string)
 
