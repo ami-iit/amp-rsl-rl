@@ -106,7 +106,7 @@ class AMP_PPO:
         # The discriminator expects concatenated observations, so the replay buffer uses half the dimension.
         obs_dim: int = self.discriminator.input_dim // 2
         self.amp_storage: ReplayBuffer = ReplayBuffer(
-            obs_dim, amp_replay_buffer_size, device
+            obs_dim=obs_dim, buffer_size=amp_replay_buffer_size, device=device
         )
         self.amp_data: AMPLoader = amp_data
         self.amp_normalizer: Optional[Any] = amp_normalizer
@@ -172,11 +172,13 @@ class AMP_PPO:
             Shape of the actions taken by the policy.
         """
         self.storage = RolloutStorage(
-            num_envs,
-            num_transitions_per_env,
-            actor_obs_shape,
-            critic_obs_shape,
-            action_shape,
+            training_type="rl",
+            num_envs=num_envs,
+            num_transitions_per_env=num_transitions_per_env,
+            obs_shape=actor_obs_shape,
+            privileged_obs_shape=critic_obs_shape,
+            actions_shape=action_shape,
+            rnd_state_shape=None,
             device=self.device,
         )
 
