@@ -224,7 +224,7 @@ class AMP_PPO:
         self.transition.action_sigma = self.actor_critic.action_std.detach()
         # Record the observations before taking an environment step.
         self.transition.observations = obs
-        self.transition.critic_observations = critic_obs
+        self.transition.privileged_observations = critic_obs
         return self.transition.actions
 
     def act_amp(self, amp_obs: torch.Tensor) -> None:
