@@ -236,7 +236,7 @@ class AMPOnPolicyRunner:
                 from rsl_rl.utils.wandb_utils import WandbSummaryWriter
                 import wandb
 
-                # Update the run name with a sequence number. This function is usefull to
+                # Update the run name with a sequence number. This function is useful to
                 # replicate the same behaviour of rsl-rl-lib before v2.3.0
                 def update_run_name_with_sequence(prefix: str) -> None:
                     # Retrieve the current wandb run details (project and entity)
