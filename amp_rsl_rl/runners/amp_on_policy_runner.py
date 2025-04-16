@@ -254,7 +254,7 @@ class AMPOnPolicyRunner:
                             # Extract the numeric part from the run name.
                             numeric_suffix = run.name[
                                 len(prefix) :
-                            ]  # e.g., from "prefix564", get "542"
+                            ]  # e.g., from "prefix564", get "564"
                             try:
                                 run_num = int(numeric_suffix)
                                 if run_num > max_num:
