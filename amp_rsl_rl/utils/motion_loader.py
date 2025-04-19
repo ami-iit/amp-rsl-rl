@@ -3,14 +3,12 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-
 from pathlib import Path
 from typing import List, Union, Tuple, Generator
 from dataclasses import dataclass
 
 import torch
 import numpy as np
-import random
 from scipy.spatial.transform import Rotation, Slerp
 from scipy.interpolate import interp1d
 
@@ -34,12 +32,11 @@ def download_amp_dataset_from_hf(
     Returns:
         List[str]: List of dataset names (without .npy extension).
     """
-
     from huggingface_hub import hf_hub_download
 
     destination_dir.mkdir(parents=True, exist_ok=True)
-
     dataset_names = []
+
     for file in files:
         file_path = hf_hub_download(
             repo_id=repo_id,
@@ -48,12 +45,8 @@ def download_amp_dataset_from_hf(
             local_files_only=False,
         )
         local_copy = destination_dir / file
-
-        # Deep copy to avoid symlinks
-        with open(file_path, "rb") as src_file:
-            with open(local_copy, "wb") as dst_file:
-                dst_file.write(src_file.read())
-
+        with open(file_path, "rb") as src_file, open(local_copy, "wb") as dst_file:
+            dst_file.write(src_file.read())
         dataset_names.append(file.replace(".npy", ""))
 
     return dataset_names
@@ -78,8 +71,8 @@ class MotionData:
         - base_quat: orientation quaternion as torch.Tensor in wxyz order
 
     Notes:
-        - The quaternion is expected in the dataset as `xyzw` format (SciPy default),
-          and it is converted internally to `wxyz` format to be compatible with IsaacLab conventions.
+        - The quaternion is expected in the dataset as xyzw format (SciPy default),
+          and it is converted internally to wxyz format to be compatible with IsaacLab conventions.
         - All data is converted to torch.Tensor on the specified device during initialization.
     """
 
@@ -90,38 +83,32 @@ class MotionData:
     base_lin_velocities_local: Union[torch.Tensor, np.ndarray]
     base_ang_velocities_local: Union[torch.Tensor, np.ndarray]
     base_quat: Union[Rotation, torch.Tensor]
-    device: str = "cpu"
+    device: torch.device = torch.device("cpu")
 
     def __post_init__(self) -> None:
-        # convert numpy arrays to torch tensors
+        # Convert numpy arrays (or SciPy Rotations) to torch tensors
+        def to_tensor(x):
+            return torch.tensor(x, device=self.device, dtype=torch.float32)
+
         if isinstance(self.joint_positions, np.ndarray):
-            self.joint_positions = torch.tensor(
-                self.joint_positions, device=self.device, dtype=torch.float32
-            )
+            self.joint_positions = to_tensor(self.joint_positions)
         if isinstance(self.joint_velocities, np.ndarray):
-            self.joint_velocities = torch.tensor(
-                self.joint_velocities, device=self.device, dtype=torch.float32
-            )
+            self.joint_velocities = to_tensor(self.joint_velocities)
         if isinstance(self.base_lin_velocities_mixed, np.ndarray):
-            self.base_lin_velocities_mixed = torch.tensor(
-                self.base_lin_velocities_mixed, device=self.device, dtype=torch.float32
-            )
+            self.base_lin_velocities_mixed = to_tensor(self.base_lin_velocities_mixed)
         if isinstance(self.base_ang_velocities_mixed, np.ndarray):
-            self.base_ang_velocities_mixed = torch.tensor(
-                self.base_ang_velocities_mixed, device=self.device, dtype=torch.float32
-            )
+            self.base_ang_velocities_mixed = to_tensor(self.base_ang_velocities_mixed)
         if isinstance(self.base_lin_velocities_local, np.ndarray):
-            self.base_lin_velocities_local = torch.tensor(
-                self.base_lin_velocities_local, device=self.device, dtype=torch.float32
-            )
+            self.base_lin_velocities_local = to_tensor(self.base_lin_velocities_local)
         if isinstance(self.base_ang_velocities_local, np.ndarray):
-            self.base_ang_velocities_local = torch.tensor(
-                self.base_ang_velocities_local, device=self.device, dtype=torch.float32
-            )
+            self.base_ang_velocities_local = to_tensor(self.base_ang_velocities_local)
         if isinstance(self.base_quat, Rotation):
-            quat_xyzw = self.base_quat.as_quat()
+            quat_xyzw = self.base_quat.as_quat()  # (T,4) xyzw
+            # convert to wxyz
             self.base_quat = torch.tensor(
-                quat_xyzw[:, [3, 0, 1, 2]], device=self.device, dtype=torch.float32
+                quat_xyzw[:, [3, 0, 1, 2]],
+                device=self.device,
+                dtype=torch.float32,
             )
 
     def __len__(self) -> int:
@@ -174,35 +161,29 @@ class AMPLoader:
     """
     Loader and processor for humanoid motion capture datasets in AMP format.
 
-    This class is responsible for:
-      - Loading `.npy` files containing motion data
-      - Optionally reordering joint names to match expected ones
+    Responsibilities:
+      - Loading .npy files containing motion data
+      - Building a unified joint ordering across all datasets
       - Resampling trajectories to match the simulator's timestep
       - Computing derived quantities (velocities, local-frame motion)
-      - Returning torch-friendly `MotionData` instances
+      - Returning torch-friendly MotionData instances
 
     Dataset format:
-        Each dataset is a `.npy` file containing a dictionary with the following keys:
-        - "joints_list": List[str]         → names of joints
-        - "joint_positions": List[np.ndarray]  → per-frame joint positions (array of shape (N,))
-        - "root_position": List[np.ndarray]    → per-frame base position in world (3D)
-        - "root_quaternion": List[np.ndarray]  → per-frame base orientation in `xyzw` format
-        - "fps": float                        → original sampling rate (frames per second)
-
-    Internally:
-        - Data is resampled via interpolation to match the simulation timestep
-        - Quaternion data is interpolated using SLERP (spherical interpolation)
-        - The `xyzw` quaternions are converted to `wxyz` format before conversion to torch.Tensor
-        - Velocities are estimated via finite differences (naïve backward difference)
+        Each .npy contains a dict with keys:
+          - "joints_list": List[str]
+          - "joint_positions": List[np.ndarray] (per-frame positions)
+          - "root_position": List[np.ndarray]
+          - "root_quaternion": List[np.ndarray] (xyzw)
+          - "fps": float (frames/sec)
 
     Args:
         device: Target torch device ('cpu' or 'cuda')
-        dataset_path_root: Directory containing the `.npy` motion files
-        dataset_names: List of dataset filenames (without extension)
-        dataset_weights: List of sampling weights (used for minibatch sampling)
+        dataset_path_root: Directory containing the .npy motion files
+        dataset_names: List of dataset filenames (no extension)
+        dataset_weights: List of sampling weights (for minibatch sampling)
         simulation_dt: Timestep used by the simulator
-        slow_down_factor: Integer factor used to slow down original dataset motion
-        expected_joint_names: (Optional) target joint name order. If provided, joint data will be permuted accordingly.
+        slow_down_factor: Integer factor to slow down original data
+        expected_joint_names: (Optional) override for joint ordering
     """
 
     def __init__(
@@ -216,31 +197,82 @@ class AMPLoader:
         expected_joint_names: Union[List[str], None] = None,
     ) -> None:
         self.device = device
-        self.motion_data: List[MotionData] = []
-        self.dataset_weights = torch.tensor(
-            dataset_weights, dtype=torch.float32, device=self.device
-        )
-        self.dataset_weights /= self.dataset_weights.sum()
-
         if isinstance(dataset_path_root, str):
             dataset_path_root = Path(dataset_path_root)
 
+        # ─── Build union of all joint names if not provided ───
+        if expected_joint_names is None:
+            joint_union: List[str] = []
+            seen = set()
+            for name in dataset_names:
+                p = dataset_path_root / f"{name}.npy"
+                info = np.load(str(p), allow_pickle=True).item()
+                for j in info["joints_list"]:
+                    if j not in seen:
+                        seen.add(j)
+                        joint_union.append(j)
+            expected_joint_names = joint_union
+        # ─────────────────────────────────────────────────────────
+
+        # Load and process each dataset into MotionData
+        self.motion_data: List[MotionData] = []
         for dataset_name in dataset_names:
             dataset_path = dataset_path_root / f"{dataset_name}.npy"
-            self.motion_data.append(
-                self.load_data(
-                    dataset_path, simulation_dt, slow_down_factor, expected_joint_names
-                )
+            md = self.load_data(
+                dataset_path,
+                simulation_dt,
+                slow_down_factor,
+                expected_joint_names,
             )
+            self.motion_data.append(md)
+
+        # Normalize dataset-level sampling weights
+        weights = torch.tensor(dataset_weights, dtype=torch.float32, device=self.device)
+        self.dataset_weights = weights / weights.sum()
+
+        # Precompute flat buffers for fast sampling
+        obs_list, next_obs_list, reset_states = [], [], []
+        for data, w in zip(self.motion_data, self.dataset_weights):
+            T = len(data)
+            idx = torch.arange(T, device=self.device)
+            obs = data.get_amp_dataset_obs(idx)
+            next_idx = torch.clamp(idx + 1, max=T - 1)
+            next_obs = data.get_amp_dataset_obs(next_idx)
+
+            obs_list.append(obs)
+            next_obs_list.append(next_obs)
+
+            quat, jp, jv, blv, bav = data.get_state_for_reset(idx)
+            reset_states.append(torch.cat([quat, jp, jv, blv, bav], dim=1))
+
+        self.all_obs = torch.cat(obs_list, dim=0)
+        self.all_next_obs = torch.cat(next_obs_list, dim=0)
+        self.all_states = torch.cat(reset_states, dim=0)
+
+        # Build per-frame sampling weights: weight_i / length_i
+        lengths = [len(d) for d in self.motion_data]
+        per_frame = torch.cat(
+            [
+                torch.full((L,), w / L, device=self.device)
+                for w, L in zip(self.dataset_weights, lengths)
+            ]
+        )
+        self.per_frame_weights = per_frame / per_frame.sum()
 
     def _resample_data_Rn(
-        self, data: List[np.ndarray], original_keyframes, target_keyframes
+        self,
+        data: List[np.ndarray],
+        original_keyframes,
+        target_keyframes,
     ) -> np.ndarray:
         f = interp1d(original_keyframes, data, axis=0)
         return f(target_keyframes)
 
     def _resample_data_SO3(
-        self, raw_quaternions: List[np.ndarray], original_keyframes, target_keyframes
+        self,
+        raw_quaternions: List[np.ndarray],
+        original_keyframes,
+        target_keyframes,
     ) -> Rotation:
 
         # the quaternion is expected in the dataset as `xyzw` format (SciPy default)
@@ -248,11 +280,9 @@ class AMPLoader:
         slerp = Slerp(original_keyframes, tmp)
         return slerp(target_keyframes)
 
-    def _compute_raw_derivative(
-        self, data: List[np.ndarray], dt: float
-    ) -> List[np.ndarray]:
-        velocities = [(data[i + 1] - data[i]) / dt for i in range(len(data) - 1)]
-        return velocities
+    def _compute_raw_derivative(self, data: np.ndarray, dt: float) -> np.ndarray:
+        d = (data[1:] - data[:-1]) / dt
+        return np.vstack([d, d[-1:]])
 
     def load_data(
         self,
@@ -270,76 +300,61 @@ class AMPLoader:
         data = np.load(str(dataset_path), allow_pickle=True).item()
         dataset_joint_names = data["joints_list"]
 
-        if expected_joint_names is not None:
-            permutation_matrix = np.zeros(
-                (len(expected_joint_names), len(dataset_joint_names))
-            )
-            for i, joint_name in enumerate(expected_joint_names):
-                if joint_name in dataset_joint_names:
-                    permutation_matrix[i, dataset_joint_names.index(joint_name)] = 1
-        else:
-            permutation_matrix = np.eye(len(dataset_joint_names))
+        # build index map for expected_joint_names
+        idx_map: List[Union[int, None]] = []
+        for j in expected_joint_names:
+            if j in dataset_joint_names:
+                idx_map.append(dataset_joint_names.index(j))
+            else:
+                idx_map.append(None)
 
-        joint_positions = [permutation_matrix @ jp for jp in data["joint_positions"]]
+        # reorder & fill joint positions
+        jp_list: List[np.ndarray] = []
+        for frame in data["joint_positions"]:
+            arr = np.zeros((len(idx_map),), dtype=frame.dtype)
+            for i, src_idx in enumerate(idx_map):
+                if src_idx is not None:
+                    arr[i] = frame[src_idx]
+            jp_list.append(arr)
 
         dt = 1.0 / data["fps"] / float(slow_down_factor)
+        T = len(jp_list)
+        t_orig = np.linspace(0, T * dt, T)
+        T_new = int(T * dt / simulation_dt)
+        t_new = np.linspace(0, T * dt, T_new)
 
-        original_keyframes = np.linspace(
-            0, len(joint_positions) * dt, len(joint_positions)
-        )
-        target_keyframes = np.linspace(
-            0, len(joint_positions) * dt, int(len(joint_positions) * dt / simulation_dt)
-        )
-
-        resampled_joint_positions = self._resample_data_Rn(
-            joint_positions, original_keyframes, target_keyframes
-        )
+        resampled_joint_positions = self._resample_data_Rn(jp_list, t_orig, t_new)
         resampled_joint_velocities = self._compute_raw_derivative(
             resampled_joint_positions, simulation_dt
         )
-        resampled_joint_velocities.append(resampled_joint_velocities[-1])
-
-        original_keyframes = np.linspace(
-            0, len(joint_positions) * dt, len(joint_positions)
-        )
-        target_keyframes = np.linspace(
-            0,
-            len(resampled_joint_positions) * simulation_dt,
-            len(resampled_joint_positions),
-        )
 
         resampled_base_positions = self._resample_data_Rn(
-            data["root_position"], original_keyframes, target_keyframes
+            data["root_position"], t_orig, t_new
         )
         resampled_base_orientations = self._resample_data_SO3(
-            data["root_quaternion"], original_keyframes, target_keyframes
+            data["root_quaternion"], t_orig, t_new
         )
 
-        resampled_base_lin_velocities_mixed = self._compute_raw_derivative(
+        resampled_base_lin_vel_mixed = self._compute_raw_derivative(
             resampled_base_positions, simulation_dt
         )
-        resampled_base_lin_velocities_mixed.append(
-            resampled_base_lin_velocities_mixed[-1]
+        resampled_base_lin_vel_local = np.stack(
+            [
+                R.as_matrix().T @ v
+                for R, v in zip(
+                    resampled_base_orientations, resampled_base_lin_vel_mixed
+                )
+            ]
         )
-
-        resampled_base_lin_velocities_local = [
-            R.as_matrix().T @ v
-            for R, v in zip(
-                resampled_base_orientations, resampled_base_lin_velocities_mixed
-            )
-        ]
+        zeros = np.zeros_like(resampled_base_lin_vel_mixed)
 
         return MotionData(
-            joint_positions=np.array(resampled_joint_positions),
-            joint_velocities=np.array(resampled_joint_velocities),
-            base_lin_velocities_mixed=np.array(resampled_base_lin_velocities_mixed),
-            base_ang_velocities_mixed=np.zeros_like(
-                resampled_base_lin_velocities_mixed
-            ),
-            base_lin_velocities_local=np.array(resampled_base_lin_velocities_local),
-            base_ang_velocities_local=np.zeros_like(
-                resampled_base_lin_velocities_local
-            ),
+            joint_positions=resampled_joint_positions,
+            joint_velocities=resampled_joint_velocities,
+            base_lin_velocities_mixed=resampled_base_lin_vel_mixed,
+            base_ang_velocities_mixed=zeros,
+            base_lin_velocities_local=resampled_base_lin_vel_local,
+            base_ang_velocities_local=zeros,
             base_quat=resampled_base_orientations,
             device=self.device,
         )
@@ -348,61 +363,29 @@ class AMPLoader:
         self, num_mini_batch: int, mini_batch_size: int
     ) -> Generator[Tuple[torch.Tensor, torch.Tensor], None, None]:
         """
-        Yields mini-batches of (state, next_state) pairs for training.
-
-        Yields:
-            Tuple[Tensor, Tensor]: (current_state, next_state)
+        Yields mini-batches of (state, next_state) pairs for training,
+        sampled directly from precomputed buffers.
         """
-        sampled_indices = torch.multinomial(
-            self.dataset_weights, mini_batch_size, replacement=True
-        )
-        counts = torch.bincount(sampled_indices, minlength=len(self.dataset_weights))
-        mini_batch_size_per_dataset = counts.long()
-
         for _ in range(num_mini_batch):
-            indices = [
-                torch.randint(0, len(data) - 1, (size,), device=self.device)
-                for data, size in zip(self.motion_data, mini_batch_size_per_dataset)
-            ]
-            states, next_states = [], []
-            for data, idx in zip(self.motion_data, indices):
-                states.append(data.get_amp_dataset_obs(idx))
-                next_states.append(data.get_amp_dataset_obs(idx + 1))
-            yield torch.cat(states), torch.cat(next_states)
+            idx = torch.multinomial(
+                self.per_frame_weights, mini_batch_size, replacement=True
+            )
+            yield self.all_obs[idx], self.all_next_obs[idx]
 
     def get_state_for_reset(self, number_of_samples: int) -> Tuple[torch.Tensor, ...]:
         """
-        Randomly samples full states for environment resets.
-
-        Args:
-            number_of_samples (int): Number of samples to return.
-
-        Returns:
-            Tuple of Tensors: (quat, joint_positions, joint_velocities, base_lin_velocities, base_ang_velocities)
+        Randomly samples full states for environment resets,
+        sampled directly from the precomputed state buffer.
         """
-        sampled_indices = torch.multinomial(
-            self.dataset_weights, number_of_samples, replacement=True
+        idx = torch.multinomial(
+            self.per_frame_weights, number_of_samples, replacement=True
         )
-        counts = torch.bincount(sampled_indices, minlength=len(self.dataset_weights))
-        number_of_samples_per_dataset = counts.long()
+        full = self.all_states[idx]
+        joint_dim = self.motion_data[0].joint_positions.shape[1]
 
-        states = []
-        for data, n in zip(self.motion_data, number_of_samples_per_dataset):
-            indices = torch.randint(0, len(data), (n,), device=self.device)
-            states.append(data.get_state_for_reset(indices))
-
-        random.shuffle(states)
-        (
-            quat,
-            joint_positions,
-            joint_velocities,
-            base_lin_velocities,
-            base_ang_velocities,
-        ) = zip(*states)
-        return (
-            torch.cat(quat),
-            torch.cat(joint_positions),
-            torch.cat(joint_velocities),
-            torch.cat(base_lin_velocities),
-            torch.cat(base_ang_velocities),
-        )
+        # The dimensions of the full state are:
+        #   - 4 (quat) + joint_dim (joint_positions) + joint_dim (joint_velocities)
+        #   + 3 (base_lin_velocities) + 3 (base_ang_velocities)
+        #   = 4 + joint_dim + joint_dim + 3 + 3
+        dims = [4, joint_dim, joint_dim, 3, 3]
+        return torch.split(full, dims, dim=1)
