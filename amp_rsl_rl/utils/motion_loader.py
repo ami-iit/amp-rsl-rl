@@ -45,6 +45,7 @@ def download_amp_dataset_from_hf(
             local_files_only=False,
         )
         local_copy = destination_dir / file
+        # Deep copy to avoid symlinks
         with open(file_path, "rb") as src_file, open(local_copy, "wb") as dst_file:
             dst_file.write(src_file.read())
         dataset_names.append(file.replace(".npy", ""))
