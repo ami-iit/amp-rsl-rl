@@ -71,8 +71,8 @@ class MotionData:
         - base_quat: orientation quaternion as torch.Tensor in wxyz order
 
     Notes:
-        - The quaternion is expected in the dataset as xyzw format (SciPy default),
-          and it is converted internally to wxyz format to be compatible with IsaacLab conventions.
+        - The quaternion is expected in the dataset as `xyzw` format (SciPy default),
+          and it is converted internally to `wxyz` format to be compatible with IsaacLab conventions.
         - All data is converted to torch.Tensor on the specified device during initialization.
     """
 
@@ -171,7 +171,7 @@ class AMPLoader:
     Dataset format:
         Each .npy contains a dict with keys:
           - "joints_list": List[str]
-          - "joint_positions": List[np.ndarray] (per-frame positions)
+          - "joint_positions": List[np.ndarray]
           - "root_position": List[np.ndarray]
           - "root_quaternion": List[np.ndarray] (xyzw)
           - "fps": float (frames/sec)
@@ -365,6 +365,12 @@ class AMPLoader:
         """
         Yields mini-batches of (state, next_state) pairs for training,
         sampled directly from precomputed buffers.
+
+        Args:
+            num_mini_batch: Number of mini-batches to yield
+            mini_batch_size: Size of each mini-batch
+        Yields:
+            Tuple of (state, next_state) tensors
         """
         for _ in range(num_mini_batch):
             idx = torch.multinomial(
@@ -376,6 +382,11 @@ class AMPLoader:
         """
         Randomly samples full states for environment resets,
         sampled directly from the precomputed state buffer.
+
+        Args:
+            number_of_samples: Number of samples to retrieve
+        Returns:
+            Tuple of (quat, joint_positions, joint_velocities, base_lin_velocities, base_ang_velocities)
         """
         idx = torch.multinomial(
             self.per_frame_weights, number_of_samples, replacement=True
