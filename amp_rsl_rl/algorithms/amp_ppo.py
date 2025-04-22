@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import Optional, Tuple, Dict, Any
 
+import itertools
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -515,11 +517,14 @@ class AMP_PPO:
             // self.num_mini_batches,
         )
 
+        if self.distillation_storage is not None:
+            distill_gen = self.distillation_storage.generator()
+        else:
+            # emits a dummy 5‐tuple of Nones forever
+            distill_gen = itertools.repeat((None, None, None, None, None))
+
         # Loop over mini-batches from the environment transitions and AMP data.
-        for sample, sample_amp_policy, sample_amp_expert in zip(
-            generator, amp_policy_generator, amp_expert_generator
-        ):
-            # Unpack the mini-batch sample from the environment.
+        for (
             (
                 obs_batch,
                 critic_obs_batch,
@@ -533,7 +538,16 @@ class AMP_PPO:
                 hid_states_batch,
                 masks_batch,
                 rnd_state_batch,
-            ) = sample
+            ),
+            (policy_state, policy_next_state),
+            (expert_state, expert_next_state),
+            dist_batch,
+        ) in zip(
+            generator,
+            amp_policy_generator,
+            amp_expert_generator,
+            distill_gen,
+        ):
 
             # Forward pass through the actor to get current policy outputs.
             self.actor_critic.act(
@@ -600,10 +614,6 @@ class AMP_PPO:
                 - self.entropy_coef * entropy_batch.mean()
             )
 
-            # Process AMP loss by unpacking policy and expert AMP samples.
-            policy_state, policy_next_state = sample_amp_policy
-            expert_state, expert_next_state = sample_amp_expert
-
             # Normalize AMP observations if a normalizer is provided.
             if self.amp_normalizer is not None:
                 with torch.no_grad():
@@ -637,45 +647,31 @@ class AMP_PPO:
 
             # Compute gradient penalty to stabilize discriminator training.
             grad_pen_loss = self.discriminator.compute_grad_pen(
-                *sample_amp_expert, lambda_=10
+                expert_state=expert_state,
+                expert_next_state=expert_next_state,
+                lambda_=10.0,
             )
 
             # To the distillation if enabled
             dist_loss = 0.0
-            distillation_storage_size = 0
-            if self.distillation_storage is not None:
-                for (
-                    obs_s,
-                    obs_t,
-                    _,
-                    action_teacher,
-                    dones_batch,
-                ) in self.distillation_storage.generator():
-
-                    if self.distill_loss_type == "mse":
-                        # compute the mean of the action. In this case we do not want to sample from the distibution we want to directly
-                        # get the mean this is the reason why we do not use act
-                        student_action_mean = self.actor_critic.act_inference(obs_s)
-                        dist_loss += torch.nn.functional.mse_loss(
-                            student_action_mean, action_teacher
-                        )
-                    else:  # KL
-                        self.teacher.update_distribution(obs_t)
-                        teacher_dist = self.teacher.distribution
-                        self.actor_critic.update_distribution(obs_s)
-                        student_dist = self.actor_critic.distribution
-                        dist_loss += torch.distributions.kl_divergence(
-                            teacher_dist, student_dist
-                        ).mean()
-
-                    distillation_storage_size += 1
-                if distillation_storage_size > 0:
-                    dist_loss /= distillation_storage_size
+            if dist_batch[0] is not None:
+                obs_s, obs_t, _, a_teacher, _ = dist_batch
+                if self.distill_loss_type == "mse":
+                    student_mean = self.actor_critic.act_inference(obs_s)
+                    dist_loss = torch.nn.functional.mse_loss(student_mean, a_teacher)
+                else:  # KL
+                    self.teacher.update_distribution(obs_t)
+                    tdist = self.teacher.distribution
+                    self.actor_critic.update_distribution(obs_s)
+                    sdist = self.actor_critic.distribution
+                    dist_loss = torch.distributions.kl_divergence(tdist, sdist).mean()
+            else:
+                dist_loss = 0.0
 
             # The final loss combines the PPO loss with AMP losses and distillation loss if available
             loss = ppo_loss + (amp_loss + grad_pen_loss)
             if self.distillation_storage:
-                lambda_dist = self.distillation_cfg["lambda"]
+                lambda_dist = self.distillation_cfg["lam"]
                 loss += lambda_dist * dist_loss
 
             # Backpropagation and optimizer step.
