@@ -93,7 +93,7 @@ class AMP_PPO:
         desired_kl: float = 0.01,
         amp_replay_buffer_size: int = 100000,
         distillation_cfg: dict | None = None,
-        teacher: nn.Module | None = None,
+        teacher: ActorCritic | None = None,
         device: str = "cpu",
     ) -> None:
         # Set device and learning hyperparameters
@@ -122,9 +122,14 @@ class AMP_PPO:
                     "The teacher is None, still distillation is enabled. This is not supported."
                 )
 
-            self.teacher = teacher
+            self.teacher: ActorCritic = teacher
             self.teacher.to(self.device)
             self.teacher.eval()
+
+            # remove required_grad from the teacher the teacher is not trained
+            for param in self.teacher.parameters():
+                param.requires_grad_(False)
+
             self.distillation_storage: Optional[RolloutStorage] = (
                 None  # Will be initialized later once environment parameters are known
             )
@@ -327,9 +332,10 @@ class AMP_PPO:
         self.distillation_transition.actions = self.actor_critic.act(
             student_obs
         ).detach()
-        self.distillation_transition.privileged_actions = self.teacher.act_inference(
-            teacher_obs
-        ).detach()
+        with torch.no_grad():  # <‑‑ guard the forward pass
+            self.distillation_transition.privileged_actions = (
+                self.teacher.act_inference(teacher_obs).detach()
+            )
         # record the observations
         self.distillation_transition.observations = student_obs
         self.distillation_transition.privileged_observations = teacher_obs
@@ -660,8 +666,9 @@ class AMP_PPO:
                     student_mean = self.actor_critic.act_inference(obs_s)
                     dist_loss = torch.nn.functional.mse_loss(student_mean, a_teacher)
                 else:  # KL
-                    self.teacher.update_distribution(obs_t)
-                    tdist = self.teacher.distribution
+                    with torch.no_grad():
+                        self.teacher.update_distribution(obs_t)
+                        tdist = self.teacher.distribution
                     self.actor_critic.update_distribution(obs_s)
                     sdist = self.actor_critic.distribution
                     dist_loss = torch.distributions.kl_divergence(tdist, sdist).mean()
