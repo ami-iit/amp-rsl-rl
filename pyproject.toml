@@ -17,13 +17,12 @@ maintainers = [  # Added separate maintainers section
     { name = "Giulio Romualdi", email = "giulio.romualdi@iit.it" },
     { name = "Giuseppe L'Erario", email = "giuseppe.lerario@iit.it" }
 ]
-license = { text = "BSD-3-Clause" }  # Explicit license identifier
+license = "BSD-3-Clause"
 readme = "README.md"
 requires-python = ">=3.8"
 classifiers = [  # Added standard PyPI classifiers
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: BSD License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
@@ -50,3 +49,6 @@ Changelog = "https://github.com/ami-iit/amp-rsl-rl/releases"
 
 [tool.setuptools_scm]
 local_scheme = "dirty-tag"
+
+[tool.setuptools]
+packages = ["amp_rsl_rl"]
