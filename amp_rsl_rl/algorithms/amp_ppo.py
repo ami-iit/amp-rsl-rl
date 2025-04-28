@@ -59,6 +59,8 @@ class AMP_PPO:
         Maximum gradient norm for clipping gradients during backpropagation.
     use_clipped_value_loss : bool, default=True
         Flag indicating whether to use a clipped value loss, as in the original PPO implementation.
+    use_smooth_clamping : bool, default=False
+        Flag indicating whether to use exponential clamping on the value loos.
     schedule : str, default="fixed"
         Learning rate schedule mode ("fixed" or "adaptive" based on KL divergence).
     desired_kl : float, default=0.01
@@ -90,6 +92,7 @@ class AMP_PPO:
         schedule: str = "fixed",
         desired_kl: float = 0.01,
         amp_replay_buffer_size: int = 100000,
+        use_smooth_clamping: bool = False,
         device: str = "cpu",
     ) -> None:
         # Set device and learning hyperparameters
@@ -146,6 +149,7 @@ class AMP_PPO:
         self.lam: float = lam
         self.max_grad_norm: float = max_grad_norm
         self.use_clipped_value_loss: bool = use_clipped_value_loss
+        self.use_smooth_clamped_loss = use_smooth_clamped_loss
 
     def init_storage(
         self,
@@ -451,10 +455,22 @@ class AMP_PPO:
             ratio = torch.exp(
                 actions_log_prob_batch - torch.squeeze(old_actions_log_prob_batch)
             )
+
+            min_ = 1.0 - self.clip_param
+            max_ = 1.0 + self.clip_param
+
+            if self.use_smooth_clamping:
+                clipped_ratio = (
+                    1
+                    / (1 + torch.exp((-(ratio - min_) / (max_ - min_) + 0.5) * 4))
+                    * (max_ - min_)
+                    + min_
+                )
+            else:
+                clipped_ratio = torch.clamp(ratio, min_, max_)
+
             surrogate = -torch.squeeze(advantages_batch) * ratio
-            surrogate_clipped = -torch.squeeze(advantages_batch) * torch.clamp(
-                ratio, 1.0 - self.clip_param, 1.0 + self.clip_param
-            )
+            surrogate_clipped = -torch.squeeze(advantages_batch) * clipped_ratio
             surrogate_loss = torch.max(surrogate, surrogate_clipped).mean()
 
             # Compute the value function loss.
