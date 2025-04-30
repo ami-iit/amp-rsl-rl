@@ -39,11 +39,13 @@ def main():
             pass
 
     # 3) Benchmark insert()
-    torch.cuda.synchronize()
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
     t0 = time.perf_counter()
     for _ in range(num_inserts):
         buf.insert(dummy_states, dummy_next)
-    torch.cuda.synchronize()
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
     t1 = time.perf_counter()
 
     total_inserted = insert_batch * num_inserts
