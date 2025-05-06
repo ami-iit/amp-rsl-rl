@@ -90,7 +90,8 @@ class ReplayBuffer:
         replace_if_needed: bool = True,
     ) -> Generator[Tuple[torch.Tensor, torch.Tensor], None, None]:
         """
-        Yield `num_mini_batch` mini‑batches, each of length `mini_batch_size`.
+        Yield `num_mini_batch` mini‑batches of (state, next_state) tuples from the buffer,
+        each of length `mini_batch_size`.
 
         If the total number of requested samples is larger than the number of
         items currently stored (`len(self)`), the method will
