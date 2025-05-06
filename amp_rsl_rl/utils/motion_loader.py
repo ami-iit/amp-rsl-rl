@@ -210,7 +210,7 @@ class AMPLoader:
             if dataset_path_root is None:
                 print(
                     "Warning: `dataset_path_root` is None."
-                    "Please specify a local path to avoid downloading every time."
+                    "A cache directory will be created."
                 )
 
                 # Create a cache directory for downloading
