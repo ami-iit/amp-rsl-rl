@@ -209,15 +209,17 @@ class AMPLoader:
             print("Downloading datasets from Hugging Face.")
             if dataset_path_root is None:
                 print(
-                    "Warning: `dataset_path_root` is None."
-                    "A cache directory will be created."
+                    "Warning: `dataset_path_root` is None. "
+                    "A cache directory will be used."
                 )
 
                 # Create a cache directory for downloading
                 dataset_path_root = platformdirs.user_cache_path(
-                    appname="amp-rsl-rl", appauthor="ami-iit"
+                    appname="amp-rsl-rl",
+                    appauthor="ami-iit",
+                    ensure_exists=True,
                 )
-                print(f"Cache directory created at: {dataset_path_root}")
+                print(f"Cache directory: {dataset_path_root}")
 
             # Convert dataset path to Path object for easier handling
             dataset_path_root = Path(dataset_path_root)
