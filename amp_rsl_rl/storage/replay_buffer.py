@@ -87,25 +87,41 @@ class ReplayBuffer:
         self,
         num_mini_batch: int,
         mini_batch_size: int,
+        replace_if_needed: bool = True,
     ) -> Generator[Tuple[torch.Tensor, torch.Tensor], None, None]:
         """
-        Yield mini-batches of (state, next_state) tuples from the buffer.
+        Yield `num_mini_batch` mini‑batches, each of length `mini_batch_size`.
 
-        Args:
-            num_mini_batch (int): Number of mini-batches to generate.
-            mini_batch_size (int): Number of samples per mini-batch.
+        If the total number of requested samples is larger than the number of
+        items currently stored (`len(self)`), the method will
 
-        Yields:
-            Tuple[Tensor, Tensor]: A mini-batch of states and next_states.
+        * raise an error  when `replace_if_needed=False`;
+        * silently sample **with replacement** when `replace_if_needed=True`
+          (the default).
+
+        Args
+        ----
+        num_mini_batch : int
+        mini_batch_size : int
+        replace_if_needed : bool, optional
+            Whether to allow sampling with replacement when the request
+            exceeds the number of stored transitions.
         """
         total = num_mini_batch * mini_batch_size
-        assert (
-            total <= self.num_samples
-        ), f"Not enough samples in buffer: requested {total}, but have {self.num_samples}"
 
-        # Generate a random permutation of valid indices on-device
-        indices = torch.randperm(self.num_samples, device=self.device)[:total]
+        if total > self.num_samples:
+            if not replace_if_needed:
+                raise ValueError(
+                    f"Not enough samples in buffer: requested {total}, "
+                    f"but have {self.num_samples}"
+                )
+            # ---- Fallback: sample WITH replacement ------------------------
+            indices = torch.randint(0, self.num_samples, (total,), device=self.device)
+        else:
+            # ---- Sample WITHOUT replacement -----------
+            indices = torch.randperm(self.num_samples, device=self.device)[:total]
 
+        # Yield the mini‑batches
         for i in range(num_mini_batch):
             batch_idx = indices[i * mini_batch_size : (i + 1) * mini_batch_size]
             yield self.states[batch_idx], self.next_states[batch_idx]

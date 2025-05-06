@@ -376,10 +376,11 @@ class AMP_PPO:
 
         # Generator for policy-generated AMP transitions.
         amp_policy_generator = self.amp_storage.feed_forward_generator(
-            self.num_learning_epochs * self.num_mini_batches,
-            self.storage.num_envs
+            num_mini_batch=self.num_learning_epochs * self.num_mini_batches,
+            mini_batch_size=self.storage.num_envs
             * self.storage.num_transitions_per_env
             // self.num_mini_batches,
+            replace_if_needed=True,
         )
 
         # Generator for expert AMP data.
