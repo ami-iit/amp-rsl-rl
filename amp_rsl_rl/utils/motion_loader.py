@@ -197,7 +197,7 @@ class AMPLoader:
         dataset_weights: List[float],
         simulation_dt: float,
         slow_down_factor: int,
-        dataset_path_root: Optional[str, Path] = None,
+        dataset_path_root: Optional[Union[str, Path]] = None,
         expected_joint_names: Optional[List[str]] = None,
         download_from_hf: Optional[bool] = False,
         robot_folder: Optional[str] = "ergocub",
