@@ -2,13 +2,13 @@
 # All rights reserved.
 #
 # SPDX-License-Identifier: BSD-3-Clause
-
 from pathlib import Path
-from typing import List, Union, Tuple, Generator
+from typing import List, Union, Tuple, Generator, Optional
 from dataclasses import dataclass
 
 import torch
 import numpy as np
+import platformdirs
 from scipy.spatial.transform import Rotation, Slerp
 from scipy.interpolate import interp1d
 
@@ -185,21 +185,50 @@ class AMPLoader:
         simulation_dt: Timestep used by the simulator
         slow_down_factor: Integer factor to slow down original data
         expected_joint_names: (Optional) override for joint ordering
+        download_from_hf: (Optional) download datasets from Hugging Face
+        robot_folder: (Optional) folder in the Hugging Face dataset repo
+        repo_id: (Optional) Hugging Face repository ID
     """
 
     def __init__(
         self,
         device: str,
-        dataset_path_root: Path,
         dataset_names: List[str],
         dataset_weights: List[float],
         simulation_dt: float,
         slow_down_factor: int,
-        expected_joint_names: Union[List[str], None] = None,
+        dataset_path_root: Optional[str, Path] = None,
+        expected_joint_names: Optional[List[str]] = None,
+        download_from_hf: Optional[bool] = False,
+        robot_folder: Optional[str] = "ergocub",
+        repo_id: Optional[str] = None,
     ) -> None:
         self.device = device
-        if isinstance(dataset_path_root, str):
+
+        if download_from_hf:
+            print("Downloading datasets from Hugging Face.")
+            if dataset_path_root is None:
+                print(
+                    "Warning: `dataset_path_root` is None."
+                    "Please specify a local path to avoid downloading every time."
+                )
+
+                # Create a cache directory for downloading
+                dataset_path_root = platformdirs.user_cache_path(
+                    appname="amp-rsl-rl", appauthor="ami-iit"
+                )
+                print(f"Cache directory created at: {dataset_path_root}")
+
+            # Convert dataset path to Path object for easier handling
             dataset_path_root = Path(dataset_path_root)
+
+            # Download dataset from Hugging Face
+            dataset_names = download_amp_dataset_from_hf(
+                dataset_path_root,
+                robot_folder=robot_folder or "ergocub",
+                files=[f"{name}.npy" for name in dataset_names],
+                repo_id=repo_id or "ami-iit/amp-dataset",
+            )
 
         # ─── Build union of all joint names if not provided ───
         if expected_joint_names is None:
