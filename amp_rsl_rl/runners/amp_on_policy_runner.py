@@ -154,13 +154,16 @@ class AMPOnPolicyRunner:
         # Initilize all the ingredients required for AMP (discriminator, dataset loader)
         num_amp_obs = extras["observations"]["amp"].shape[1]
         amp_data = AMPLoader(
-            self.device,
-            self.cfg["amp_data_path"],
-            self.cfg["dataset_names"],
-            self.cfg["dataset_weights"],
-            delta_t,
-            self.cfg["slow_down_factor"],
-            actuated_joint_names,
+            device=self.device,
+            dataset_path_root=self.cfg.get("amp_data_path", None),
+            dataset_names=self.cfg["dataset_names"],
+            dataset_weights=self.cfg["dataset_weights"],
+            simulation_dt=delta_t,
+            slow_down_factor=self.cfg["slow_down_factor"],
+            expected_joint_names=actuated_joint_names,
+            download_from_hf=self.cfg.get("download_from_hf", False),
+            robot_folder=self.cfg.get("robot_folder", None),
+            repo_id=self.cfg.get("repo_id", None),
         )
 
         # self.env.unwrapped.scene["robot"].joint_names)
