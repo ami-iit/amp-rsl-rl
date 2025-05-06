@@ -110,6 +110,7 @@ class ReplayBuffer:
         """
         total = num_mini_batch * mini_batch_size
 
+        # Sampling with replacement might yield duplicate samples, which can affect training dynamics
         if total > self.num_samples:
             if not replace_if_needed:
                 raise ValueError(
