@@ -87,7 +87,7 @@ class ReplayBuffer:
         self,
         num_mini_batch: int,
         mini_batch_size: int,
-        replace_if_needed: bool = True,
+        allow_replacement: bool = True,
     ) -> Generator[Tuple[torch.Tensor, torch.Tensor], None, None]:
         """
         Yield `num_mini_batch` mini‑batches of (state, next_state) tuples from the buffer,
@@ -96,15 +96,15 @@ class ReplayBuffer:
         If the total number of requested samples is larger than the number of
         items currently stored (`len(self)`), the method will
 
-        * raise an error  when `replace_if_needed=False`;
-        * silently sample **with replacement** when `replace_if_needed=True`
+        * raise an error  when `allow_replacement=False`;
+        * silently sample **with replacement** when `allow_replacement=True`
           (the default).
 
         Args
         ----
         num_mini_batch : int
         mini_batch_size : int
-        replace_if_needed : bool, optional
+        allow_replacement : bool, optional
             Whether to allow sampling with replacement when the request
             exceeds the number of stored transitions.
         """
@@ -112,15 +112,18 @@ class ReplayBuffer:
 
         # Sampling with replacement might yield duplicate samples, which can affect training dynamics
         if total > self.num_samples:
-            if not replace_if_needed:
+            if not allow_replacement:
                 raise ValueError(
                     f"Not enough samples in buffer: requested {total}, "
                     f"but have {self.num_samples}"
                 )
-            # ---- Fallback: sample WITH replacement ------------------------
-            indices = torch.randint(0, self.num_samples, (total,), device=self.device)
+            # Permute‑then‑modulo
+            cycles = (total + self.num_samples - 1) // self.num_samples
+            big_size = self.num_samples * cycles
+            big_perm = torch.randperm(big_size, device=self.device)
+            indices = big_perm[:total] % self.num_samples
         else:
-            # ---- Sample WITHOUT replacement -----------
+            # Sample WITHOUT replacement
             indices = torch.randperm(self.num_samples, device=self.device)[:total]
 
         # Yield the mini‑batches

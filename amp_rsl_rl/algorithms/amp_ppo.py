@@ -380,7 +380,7 @@ class AMP_PPO:
             mini_batch_size=self.storage.num_envs
             * self.storage.num_transitions_per_env
             // self.num_mini_batches,
-            replace_if_needed=True,
+            allow_replacement=True,
         )
 
         # Generator for expert AMP data.
