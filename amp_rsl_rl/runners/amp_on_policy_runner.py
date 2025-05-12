@@ -130,6 +130,8 @@ class AMPOnPolicyRunner:
         self.alg_cfg = train_cfg["algorithm"]
         self.policy_cfg = train_cfg["policy"]
         self.discriminator_cfg = train_cfg["discriminator"]
+        self.dist_cfg = self.cfg.get("distill", None)
+        self.teacher_cfg = self.cfg.get("teacher", None)
         self.device = device
         self.env = env
 
@@ -163,8 +165,6 @@ class AMPOnPolicyRunner:
             actuated_joint_names,
         )
 
-        # self.env.unwrapped.scene["robot"].joint_names)
-
         # amp_data = AMPLoader(num_amp_obs, self.device)
         self.amp_normalizer = Normalizer(num_amp_obs, device=self.device)
         self.discriminator = Discriminator(
@@ -175,6 +175,43 @@ class AMPOnPolicyRunner:
             device=self.device,
         ).to(self.device)
 
+        # if you want distillation, add these two keys to train_cfg["algorithm"]
+        teacher = None
+        num_teacher_obs = None
+
+        if self.dist_cfg is None and self.teacher_cfg is not None:
+            raise ValueError(
+                "You need to provide distillation configuration if you want to use a teacher model."
+            )
+        if self.dist_cfg is not None and self.teacher_cfg is None:
+            raise ValueError(
+                "You need to provide teacher configuration if you want to use distillation."
+            )
+
+        if self.dist_cfg is not None and self.teacher_cfg is not None:
+            # Load the distillation configuration
+            num_teacher_obs = extras["observations"]["teacher"].shape[1]
+            if "teacher_critic" in extras["observations"]:
+                num_teacher_critic_obs = extras["observations"]["teacher_critic"].shape[
+                    1
+                ]
+            else:
+                num_teacher_critic_obs = num_teacher_obs
+            # Initialize the teacher
+            teacher_class: ActorCritic = eval(self.teacher_cfg.pop("class_name"))
+            teacher = teacher_class(
+                num_teacher_obs,
+                num_teacher_critic_obs,
+                self.env.num_actions,
+                **self.teacher_cfg,
+            ).to(self.device)
+            teacher.load_state_dict(
+                torch.load(
+                    self.dist_cfg["teacher_model_path"], map_location=self.device
+                )["model_state_dict"]
+            )
+            teacher.eval()
+
         # Initialize the PPO algorithm
         alg_class = eval(self.alg_cfg.pop("class_name"))  # AMP_PPO
 
@@ -184,6 +221,8 @@ class AMPOnPolicyRunner:
             amp_data=amp_data,
             amp_normalizer=self.amp_normalizer,
             device=self.device,
+            distillation_cfg=self.dist_cfg,
+            teacher=teacher,
             **self.alg_cfg,
         )
         self.num_steps_per_env = self.cfg["num_steps_per_env"]
@@ -207,6 +246,15 @@ class AMPOnPolicyRunner:
             [num_critic_obs],
             [self.env.num_actions],
         )
+
+        if self.dist_cfg is not None:
+            self.alg.init_storage_distillation(
+                num_envs=self.env.num_envs,
+                num_transitions_per_env=self.num_steps_per_env,
+                student_obs_shape=[num_obs],
+                teacher_obs_shape=[num_teacher_obs],
+                action_shape=[self.env.num_actions],
+            )
 
         # Log
         self.log_dir = log_dir
@@ -293,6 +341,7 @@ class AMPOnPolicyRunner:
         obs, extras = self.env.get_observations()
         amp_obs = extras["observations"]["amp"]
         critic_obs = extras["observations"].get("critic", obs)
+        teacher_obs = extras["observations"].get("teacher", None)
         obs, critic_obs = obs.to(self.device), critic_obs.to(self.device)
         amp_obs = amp_obs.to(self.device)
         self.train_mode()  # switch to train mode (for dropout for example)
@@ -320,9 +369,12 @@ class AMPOnPolicyRunner:
                 for i in range(self.num_steps_per_env):
                     actions = self.alg.act(obs, critic_obs)
                     self.alg.act_amp(amp_obs)
+                    self.alg.act_distillation(obs, teacher_obs)
                     obs, rewards, dones, infos = self.env.step(actions)
                     _, extras = self.env.get_observations()
                     next_amp_obs = extras["observations"]["amp"]
+                    if self.dist_cfg is not None:
+                        next_teacher_obs = extras["observations"]["teacher"]
                     obs = self.obs_normalizer(obs)
                     if "critic" in infos["observations"]:
                         critic_obs = self.critic_obs_normalizer(
@@ -338,6 +390,9 @@ class AMPOnPolicyRunner:
                     )
                     next_amp_obs = next_amp_obs.to(self.device)
 
+                    if self.dist_cfg is not None:
+                        teacher_obs = next_teacher_obs.to(self.device)
+
                     # Process the AMP reward
                     style_rewards = self.discriminator.predict_reward(
                         amp_obs, next_amp_obs, normalizer=self.amp_normalizer
@@ -351,6 +406,7 @@ class AMPOnPolicyRunner:
 
                     self.alg.process_env_step(rewards, dones, infos)
                     self.alg.process_amp_step(next_amp_obs)
+                    self.alg.process_distillation_step(rewards, dones, infos)
 
                     # The next observation becomes the current observation for the next step
                     amp_obs = torch.clone(next_amp_obs)
@@ -395,6 +451,7 @@ class AMPOnPolicyRunner:
                 mean_expert_pred,
                 mean_accuracy_policy,
                 mean_accuracy_expert,
+                mean_dist_loss,
             ) = self.alg.update()
             stop = time.time()
             learn_time = stop - start
@@ -470,6 +527,11 @@ class AMPOnPolicyRunner:
         self.writer.add_scalar(
             "Loss/accuracy_expert", locs["mean_accuracy_expert"], locs["it"]
         )
+
+        if self.dist_cfg is not None:
+            self.writer.add_scalar(
+                "Loss/distillation_loss", locs["mean_dist_loss"], locs["it"]
+            )
 
         self.writer.add_scalar("Loss/learning_rate", self.alg.learning_rate, locs["it"])
         self.writer.add_scalar("Policy/mean_noise_std", mean_std.item(), locs["it"])
