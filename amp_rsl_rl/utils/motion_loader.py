@@ -281,6 +281,27 @@ class AMPLoader:
         slerp = Slerp(original_keyframes, tmp)
         return slerp(target_keyframes)
 
+    def _compute_ang_vel_derivative(
+        self,
+        data: List[Rotation],
+        dt: float,
+        local: bool = False,
+    ) -> np.ndarray:
+        R_prev = data[:-1]
+        R_next = data[1:]
+
+        if local:
+            # ΔR_body = R_i⁻¹ · R_{i+1}
+            rel = R_prev.inv() * R_next
+        else:
+            # ΔR_inertial = R_{i+1} · R_i⁻¹
+            rel = R_next * R_prev.inv()
+
+        # Log-map to rotation vectors and divide by Δt
+        rotvec = rel.as_rotvec() / dt
+
+        return np.vstack((rotvec, rotvec[-1]))
+
     def _compute_raw_derivative(self, data: np.ndarray, dt: float) -> np.ndarray:
         d = (data[1:] - data[:-1]) / dt
         return np.vstack([d, d[-1:]])
@@ -339,6 +360,11 @@ class AMPLoader:
         resampled_base_lin_vel_mixed = self._compute_raw_derivative(
             resampled_base_positions, simulation_dt
         )
+
+        resampled_base_ang_vel_mixed = self._compute_ang_vel_derivative(
+            resampled_base_orientations, simulation_dt, local=False
+        )
+
         resampled_base_lin_vel_local = np.stack(
             [
                 R.as_matrix().T @ v
@@ -347,15 +373,17 @@ class AMPLoader:
                 )
             ]
         )
-        zeros = np.zeros_like(resampled_base_lin_vel_mixed)
+        resampled_base_ang_vel_local = self._compute_ang_vel_derivative(
+            resampled_base_orientations, simulation_dt, local=True
+        )
 
         return MotionData(
             joint_positions=resampled_joint_positions,
             joint_velocities=resampled_joint_velocities,
             base_lin_velocities_mixed=resampled_base_lin_vel_mixed,
-            base_ang_velocities_mixed=zeros,
+            base_ang_velocities_mixed=resampled_base_ang_vel_mixed,
             base_lin_velocities_local=resampled_base_lin_vel_local,
-            base_ang_velocities_local=zeros,
+            base_ang_velocities_local=resampled_base_ang_vel_local,
             base_quat=resampled_base_orientations,
             device=self.device,
         )
