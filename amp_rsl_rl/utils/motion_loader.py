@@ -84,6 +84,8 @@ class MotionData:
     base_lin_velocities_local: Union[torch.Tensor, np.ndarray]
     base_ang_velocities_local: Union[torch.Tensor, np.ndarray]
     base_quat: Union[Rotation, torch.Tensor]
+    goal_vector: Union[torch.Tensor, np.ndarray]
+    phase_variable: Union[torch.Tensor, np.ndarray]
     device: torch.device = torch.device("cpu")
 
     def __post_init__(self) -> None:
@@ -103,6 +105,10 @@ class MotionData:
             self.base_lin_velocities_local = to_tensor(self.base_lin_velocities_local)
         if isinstance(self.base_ang_velocities_local, np.ndarray):
             self.base_ang_velocities_local = to_tensor(self.base_ang_velocities_local)
+        if isinstance(self.goal_vector, np.ndarray):
+            self.goal_vector = to_tensor(self.goal_vector)
+        if isinstance(self.phase_variable, np.ndarray):
+            self.phase_variable = to_tensor(self.phase_variable)
         if isinstance(self.base_quat, Rotation):
             quat_xyzw = self.base_quat.as_quat()  # (T,4) xyzw
             # convert to wxyz
@@ -131,6 +137,7 @@ class MotionData:
                 self.joint_velocities[indices],
                 self.base_lin_velocities_local[indices],
                 self.base_ang_velocities_local[indices],
+                self.goal_vector[indices],
             ),
             dim=1,
         )
@@ -143,7 +150,7 @@ class MotionData:
             indices: indices of samples to retrieve
 
         Returns:
-            Tuple of (quat, joint_positions, joint_velocities, base_lin_velocities, base_ang_velocities)
+            Tuple of (quat, joint_positions, joint_velocities, base_lin_velocities, base_ang_velocities, goal_vector, phase_variable)
         """
         return (
             self.base_quat[indices],
@@ -151,6 +158,8 @@ class MotionData:
             self.joint_velocities[indices],
             self.base_lin_velocities_local[indices],
             self.base_ang_velocities_local[indices],
+            self.goal_vector[indices],
+            self.phase_variable[indices],
         )
 
     def get_random_sample_for_reset(self, items: int = 1) -> Tuple[torch.Tensor, ...]:
@@ -217,13 +226,24 @@ class AMPLoader:
 
         # Load and process each dataset into MotionData
         self.motion_data: List[MotionData] = []
-        for dataset_name in dataset_names:
+        num_goals = len(dataset_names)
+        for i, dataset_name in enumerate(dataset_names):
             dataset_path = dataset_path_root / f"{dataset_name}.npy"
+
+            # Create goal_vector (one-hot)
+            goal_vector_np = np.zeros((1, num_goals), dtype=np.float32)
+            goal_vector_np[0, i] = 1.0
+
+            # Create phase_variable (placeholder, will be populated in load_data)
+            # Phase variable will be created inside load_data as its length depends on resampling
+
             md = self.load_data(
                 dataset_path,
                 simulation_dt,
                 slow_down_factor,
                 expected_joint_names,
+                goal_vector_np, # Pass the template goal vector
+                num_goals,      # Pass num_goals to correctly tile goal_vector later
             )
             self.motion_data.append(md)
 
@@ -243,8 +263,8 @@ class AMPLoader:
             obs_list.append(obs)
             next_obs_list.append(next_obs)
 
-            quat, jp, jv, blv, bav = data.get_state_for_reset(idx)
-            reset_states.append(torch.cat([quat, jp, jv, blv, bav], dim=1))
+            quat, jp, jv, blv, bav, gv, pv = data.get_state_for_reset(idx)
+            reset_states.append(torch.cat([quat, jp, jv, blv, bav, gv, pv], dim=1))
 
         self.all_obs = torch.cat(obs_list, dim=0)
         self.all_next_obs = torch.cat(next_obs_list, dim=0)
@@ -291,6 +311,8 @@ class AMPLoader:
         simulation_dt: float,
         slow_down_factor: int = 1,
         expected_joint_names: Union[List[str], None] = None,
+        goal_vector_template: np.ndarray = None, # template for goal vector
+        num_goals: int = 0, # total number of goals
     ) -> MotionData:
         """
         Loads and processes one motion dataset.
@@ -336,6 +358,13 @@ class AMPLoader:
             data["root_quaternion"], t_orig, t_new
         )
 
+        # Create phase variable (normalized 0 to 1)
+        phase_variable_np = np.linspace(0, 1, T_new, dtype=np.float32).reshape(-1, 1)
+
+        # Tile goal vector to match trajectory length
+        goal_vector_np = np.tile(goal_vector_template, (T_new, 1))
+
+
         resampled_base_lin_vel_mixed = self._compute_raw_derivative(
             resampled_base_positions, simulation_dt
         )
@@ -357,6 +386,8 @@ class AMPLoader:
             base_lin_velocities_local=resampled_base_lin_vel_local,
             base_ang_velocities_local=zeros,
             base_quat=resampled_base_orientations,
+            goal_vector=goal_vector_np,
+            phase_variable=phase_variable_np,
             device=self.device,
         )
 
@@ -398,6 +429,8 @@ class AMPLoader:
         # The dimensions of the full state are:
         #   - 4 (quat) + joint_dim (joint_positions) + joint_dim (joint_velocities)
         #   + 3 (base_lin_velocities) + 3 (base_ang_velocities)
-        #   = 4 + joint_dim + joint_dim + 3 + 3
-        dims = [4, joint_dim, joint_dim, 3, 3]
+        #   + num_goals (goal_vector) + 1 (phase_variable)
+        #   = 4 + joint_dim + joint_dim + 3 + 3 + num_goals + 1
+        num_goals = self.motion_data[0].goal_vector.shape[1]
+        dims = [4, joint_dim, joint_dim, 3, 3, num_goals, 1]
         return torch.split(full, dims, dim=1)

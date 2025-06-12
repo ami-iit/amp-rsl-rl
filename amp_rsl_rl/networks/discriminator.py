@@ -65,21 +65,34 @@ class Discriminator(nn.Module):
 
     def compute_grad_pen(
         self,
-        expert_state: torch.Tensor,
-        expert_next_state: torch.Tensor,
+        expert_state_part: torch.Tensor,
+        expert_next_state_part: torch.Tensor,
+        expert_goal_vector: torch.Tensor,
+        normalizer, # Expected to be an instance of amp_rsl_rl.utils.Normalizer
         lambda_: float = 10,
     ) -> torch.Tensor:
         """Computes the gradient penalty used to regularize the discriminator.
+           Assumes expert_state_part and expert_next_state_part are unnormalized.
+           The normalizer is applied to state parts before concatenation with goal.
 
         Args:
-            expert_state (Tensor): Batch of expert states.
-            expert_next_state (Tensor): Batch of expert next states.
+            expert_state_part (Tensor): Batch of expert state parts (unnormalized).
+            expert_next_state_part (Tensor): Batch of expert next state parts (unnormalized).
+            expert_goal_vector (Tensor): Batch of expert goal vectors.
+            normalizer: Normalizer instance for state parts.
             lambda_ (float): Penalty coefficient.
 
         Returns:
             Tensor: Gradient penalty value.
         """
-        expert_data = torch.cat([expert_state, expert_next_state], dim=-1)
+        if normalizer is not None:
+            expert_state_part_norm = normalizer.normalize(expert_state_part)
+            expert_next_state_part_norm = normalizer.normalize(expert_next_state_part)
+        else:
+            expert_state_part_norm = expert_state_part
+            expert_next_state_part_norm = expert_next_state_part
+
+        expert_data = torch.cat([expert_state_part_norm, expert_next_state_part_norm, expert_goal_vector], dim=-1)
         expert_data.requires_grad = True
 
         disc = self.forward(expert_data)
@@ -126,26 +139,33 @@ class Discriminator(nn.Module):
 
     def predict_reward(
         self,
-        state: torch.Tensor,
-        next_state: torch.Tensor,
-        normalizer=None,
+        state_part: torch.Tensor,
+        next_state_part: torch.Tensor,
+        goal_vector: torch.Tensor,
+        normalizer=None, # Expected to be an instance of amp_rsl_rl.utils.Normalizer
     ) -> torch.Tensor:
         """Predicts reward based on discriminator output using a log-style formulation.
+           Assumes state_part and next_state_part are unnormalized.
+           The normalizer is applied to state parts before concatenation with goal.
 
         Args:
-            state (Tensor): Current state tensor.
-            next_state (Tensor): Next state tensor.
-            normalizer (Optional): Optional state normalizer.
+            state_part (Tensor): Current state part tensor (unnormalized).
+            next_state_part (Tensor): Next state part tensor (unnormalized).
+            goal_vector (Tensor): Goal vector tensor.
+            normalizer (Optional): Optional state normalizer for state parts.
 
         Returns:
             Tensor: Computed adversarial reward.
         """
         with torch.no_grad():
+            state_part_norm = state_part
+            next_state_part_norm = next_state_part
             if normalizer is not None:
-                state = normalizer.normalize(state)
-                next_state = normalizer.normalize(next_state)
+                state_part_norm = normalizer.normalize(state_part)
+                next_state_part_norm = normalizer.normalize(next_state_part)
 
-            discriminator_logit = self.forward(torch.cat([state, next_state], dim=-1))
+            d_input = torch.cat([state_part_norm, next_state_part_norm, goal_vector], dim=-1)
+            discriminator_logit = self.forward(d_input)
             prob = torch.sigmoid(discriminator_logit)
 
             # Avoid log(0) by clamping the input to a minimum threshold

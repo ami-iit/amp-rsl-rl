@@ -103,16 +103,27 @@ class AMP_PPO:
 
         # Set up the discriminator and move it to the appropriate device.
         self.discriminator: Discriminator = discriminator.to(self.device)
-        self.amp_transition: RolloutStorage.Transition = RolloutStorage.Transition()
-
-        # Determine observation dimension used in the replay buffer.
-        # The discriminator expects concatenated observations, so the replay buffer uses half the dimension.
-        obs_dim: int = self.discriminator.input_dim // 2
-        self.amp_storage: ReplayBuffer = ReplayBuffer(
-            obs_dim=obs_dim, buffer_size=amp_replay_buffer_size, device=device
-        )
         self.amp_data: AMPLoader = amp_data
-        self.amp_normalizer: Optional[Any] = amp_normalizer
+        self.amp_normalizer: Optional[Any] = amp_normalizer # Should be Normalizer for state_part
+
+        # Determine goal_dim from amp_data (assuming all motion_data items have same goal_dim)
+        # Ensure amp_data is not empty and motion_data is populated
+        if not self.amp_data.motion_data:
+            raise ValueError("AMP_PPO: amp_data.motion_data is empty, cannot determine goal_dim.")
+        self.goal_dim: int = self.amp_data.motion_data[0].goal_vector.shape[1]
+
+        self.amp_transition: RolloutStorage.Transition = RolloutStorage.Transition()
+        self.amp_transition.goal_vector = None # Custom field for current goal
+
+        # Determine observation dimension for amp_storage.
+        # It stores concat(state_part, goal_vector).
+        # self.amp_normalizer.obs_dim should be the dimension of the state_part.
+        if self.amp_normalizer is None:
+            raise ValueError("AMP_PPO: amp_normalizer is None, cannot determine amp_storage_obs_dim.")
+        amp_storage_obs_dim: int = self.amp_normalizer.obs_dim + self.goal_dim
+        self.amp_storage: ReplayBuffer = ReplayBuffer(
+            obs_dim=amp_storage_obs_dim, buffer_size=amp_replay_buffer_size, device=device
+        )
 
         # Set up the actor-critic (policy) and move it to the device.
         self.actor_critic = actor_critic
@@ -231,16 +242,20 @@ class AMP_PPO:
         self.transition.privileged_observations = critic_obs
         return self.transition.actions
 
-    def act_amp(self, amp_obs: torch.Tensor) -> None:
+    def act_amp(self, amp_obs_part: torch.Tensor, goal_vector: torch.Tensor) -> None:
         """
-        Records the AMP observation (from the policy) into the AMP transition storage.
+        Records the AMP observation part and goal vector (from the policy)
+        into the AMP transition storage.
 
         Parameters
         ----------
-        amp_obs : torch.Tensor
-            The AMP observation from the policy.
+        amp_obs_part : torch.Tensor
+            The AMP observation state part from the policy.
+        goal_vector : torch.Tensor
+            The goal vector associated with the current policy state.
         """
-        self.amp_transition.observations = amp_obs
+        self.amp_transition.observations = amp_obs_part # Stores only the state part
+        self.amp_transition.goal_vector = goal_vector   # Custom field
 
     def process_env_step(
         self, rewards: torch.Tensor, dones: torch.Tensor, infos: Dict[str, Any]
@@ -276,18 +291,42 @@ class AMP_PPO:
         # Reset the actor-critic states for environments that are done.
         self.actor_critic.reset(dones)
 
-    def process_amp_step(self, amp_obs: torch.Tensor) -> None:
+    def process_amp_step(self, next_amp_obs_part: torch.Tensor, current_goal_vector: torch.Tensor) -> None:
         """
-        Processes an AMP step by inserting the current AMP observation and the new observation (from expert data)
-        into the AMP replay buffer. Clears the temporary AMP transition afterwards.
+        Processes an AMP step by concatenating current state_part and goal_vector,
+        and next_state_part and goal_vector, then inserting them into the AMP replay buffer.
+        Clears the temporary AMP transition afterwards.
 
         Parameters
         ----------
-        amp_obs : torch.Tensor
-            The new AMP observation (from expert data or policy update).
+        next_amp_obs_part : torch.Tensor
+            The AMP observation state part for the next state.
+        current_goal_vector : torch.Tensor
+            The goal vector associated with the current transition (assumed constant for s and s').
         """
-        self.amp_storage.insert(self.amp_transition.observations, amp_obs)
+        if self.amp_transition.observations is None or self.amp_transition.goal_vector is None:
+            # This can happen if process_amp_step is called without a preceding act_amp
+            # (e.g. if an episode truncates early before any AMP actions are taken for that env)
+            # Or if clear() was called prematurely. For safety, we can skip insertion.
+            # print("Warning: AMP_PPO.process_amp_step called with no prior amp_transition data. Skipping insertion.")
+            self.amp_transition.clear() # Ensure custom fields are also cleared
+            if hasattr(self.amp_transition, 'goal_vector'):
+                 self.amp_transition.goal_vector = None
+            return
+
+        current_combined_amp_obs_for_storage = torch.cat(
+            [self.amp_transition.observations, self.amp_transition.goal_vector], dim=-1
+        )
+        next_combined_amp_obs_for_storage = torch.cat(
+            [next_amp_obs_part, current_goal_vector], dim=-1
+        )
+
+        self.amp_storage.insert(current_combined_amp_obs_for_storage, next_combined_amp_obs_for_storage)
         self.amp_transition.clear()
+        # Ensure custom fields are cleared if base class clear() doesn't handle them
+        if hasattr(self.amp_transition, 'goal_vector'):
+            self.amp_transition.goal_vector = None
+
 
     def compute_returns(self, last_critic_obs: torch.Tensor) -> None:
         """
@@ -494,24 +533,39 @@ class AMP_PPO:
             )
 
             # Process AMP loss by unpacking policy and expert AMP samples.
-            policy_state, policy_next_state = sample_amp_policy
-            expert_state, expert_next_state = sample_amp_expert
+            # These are combined_obs: concat(state_part, goal_vector)
+            policy_combined_obs, policy_next_combined_obs = sample_amp_policy
+            expert_combined_obs, expert_next_combined_obs = sample_amp_expert
 
-            # Normalize AMP observations if a normalizer is provided.
+            # Split into state_part and goal_vector
+            policy_state_part = policy_combined_obs[:, : -self.goal_dim]
+            policy_goal = policy_combined_obs[:, -self.goal_dim :]
+            policy_next_state_part = policy_next_combined_obs[:, : -self.goal_dim]
+            # Assuming goal is constant for s and s', so policy_goal from current is used.
+
+            expert_state_part = expert_combined_obs[:, : -self.goal_dim]
+            expert_goal = expert_combined_obs[:, -self.goal_dim :]
+            expert_next_state_part = expert_next_combined_obs[:, : -self.goal_dim]
+
+            # Normalize only the state parts of AMP observations.
+            policy_state_part_norm = policy_state_part # Keep unnormalized for potential normalizer update later
+            policy_next_state_part_norm = policy_next_state_part
+            expert_state_part_norm = expert_state_part
+            expert_next_state_part_norm = expert_next_state_part
+
             if self.amp_normalizer is not None:
-                with torch.no_grad():
-                    policy_state = self.amp_normalizer.normalize(policy_state)
-                    policy_next_state = self.amp_normalizer.normalize(policy_next_state)
-                    expert_state = self.amp_normalizer.normalize(expert_state)
-                    expert_next_state = self.amp_normalizer.normalize(expert_next_state)
+                with torch.no_grad(): # Normalization should not affect gradients for loss computation here
+                    policy_state_part_norm = self.amp_normalizer.normalize(policy_state_part)
+                    policy_next_state_part_norm = self.amp_normalizer.normalize(policy_next_state_part)
+                    expert_state_part_norm = self.amp_normalizer.normalize(expert_state_part)
+                    expert_next_state_part_norm = self.amp_normalizer.normalize(expert_next_state_part)
 
-            # Pass concatenated state transitions to the discriminator.
-            policy_d = self.discriminator(
-                torch.cat([policy_state, policy_next_state], dim=-1)
-            )
-            expert_d = self.discriminator(
-                torch.cat([expert_state, expert_next_state], dim=-1)
-            )
+            # Discriminator input: torch.cat([normalized_state_part, normalized_next_state_part, goal_vector], dim=-1)
+            policy_d_input = torch.cat([policy_state_part_norm, policy_next_state_part_norm, policy_goal], dim=-1)
+            policy_d = self.discriminator(policy_d_input)
+
+            expert_d_input = torch.cat([expert_state_part_norm, expert_next_state_part_norm, expert_goal], dim=-1)
+            expert_d = self.discriminator(expert_d_input)
 
             # Compute discriminator losses for expert and policy data.
             expert_loss = self.discriminator_expert_loss(expert_d)
@@ -521,23 +575,27 @@ class AMP_PPO:
             amp_loss = 0.5 * (expert_loss + policy_loss)
 
             # Compute gradient penalty to stabilize discriminator training.
+            # Assumes compute_grad_pen takes (unnormalized_state_part, unnormalized_next_state_part, goal, lambda)
+            # and handles normalization internally.
             grad_pen_loss = self.discriminator.compute_grad_pen(
-                *sample_amp_expert, lambda_=10
+                expert_state_part, expert_next_state_part, expert_goal, lambda_=10.0 # Using a fixed lambda
             )
 
             # The final loss combines the PPO loss with AMP losses.
-            loss = ppo_loss + (amp_loss + grad_pen_loss)
+            loss = ppo_loss + (amp_loss + grad_pen_loss) # grad_pen_weight is part of PPO hyperparams usually
 
             # Backpropagation and optimizer step.
             self.optimizer.zero_grad()
             loss.backward()
             nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.max_grad_norm)
+            # Clip discriminator gradients if needed, though often handled by grad_pen
+            # nn.utils.clip_grad_norm_(self.discriminator.parameters(), self.max_grad_norm)
             self.optimizer.step()
 
-            # Update the normalizer with current policy and expert AMP observations.
+            # Update the normalizer with current policy and expert AMP state_parts (unnormalized).
             if self.amp_normalizer is not None:
-                self.amp_normalizer.update(policy_state)
-                self.amp_normalizer.update(expert_state)
+                self.amp_normalizer.update(policy_state_part) # Pass the unnormalized state part
+                self.amp_normalizer.update(expert_state_part) # Pass the unnormalized state part
 
             # Compute probabilities from the discriminator logits.
             policy_d_prob = torch.sigmoid(policy_d)

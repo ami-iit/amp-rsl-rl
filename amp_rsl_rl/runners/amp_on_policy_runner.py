@@ -132,28 +132,11 @@ class AMPOnPolicyRunner:
         self.discriminator_cfg = train_cfg["discriminator"]
         self.device = device
         self.env = env
-
-        # Get the size of the observation space
-        obs, extras = self.env.get_observations()
-        num_obs = obs.shape[1]
-        if "critic" in extras["observations"]:
-            num_critic_obs = extras["observations"]["critic"].shape[1]
-        else:
-            num_critic_obs = num_obs
-        actor_critic_class = eval(self.policy_cfg.pop("class_name"))  # ActorCritic
-        actor_critic: ActorCritic | ActorCriticRecurrent | ActorCriticMoE = (
-            actor_critic_class(
-                num_obs, num_critic_obs, self.env.num_actions, **self.policy_cfg
-            ).to(self.device)
-        )
-
+        delta_t = self.env.cfg.sim.dt * self.env.cfg.decimation
         actuated_joint_names = self.env.cfg.actions.joint_positions.joint_names
 
-        delta_t = self.env.cfg.sim.dt * self.env.cfg.decimation
-
-        # Initilize all the ingredients required for AMP (discriminator, dataset loader)
-        num_amp_obs = extras["observations"]["amp"].shape[1]
-        amp_data = AMPLoader(
+        # Initialize AMPLoader first to get goal_dim
+        self.amp_data = AMPLoader(
             self.device,
             self.cfg["amp_data_path"],
             self.cfg["dataset_names"],
@@ -162,14 +145,43 @@ class AMPOnPolicyRunner:
             self.cfg["slow_down_factor"],
             actuated_joint_names,
         )
+        goal_dim = self.amp_data.motion_data[0].goal_vector.shape[1] # Get from an initialized motion data
+        phase_dim = 1 # Assuming phase is a single dimension
 
-        # self.env.unwrapped.scene["robot"].joint_names)
+        # Get the size of the observation space
+        # These are the "original" dimensions from the environment, before adding goal/phase
+        _obs_dict = self.env.get_observations()
+        original_obs_dim = _obs_dict["obs"].shape[1]
+        if "critic" in _obs_dict["observations"]:
+            original_critic_obs_dim = _obs_dict["observations"]["critic"].shape[1]
+        else:
+            original_critic_obs_dim = original_obs_dim
 
-        # amp_data = AMPLoader(num_amp_obs, self.device)
-        self.amp_normalizer = Normalizer(num_amp_obs, device=self.device)
+        num_original_amp_obs_dim = _obs_dict["observations"]["amp"].shape[1]
+
+        # Calculate policy observation dimensions
+        policy_obs_dim = original_obs_dim + goal_dim + phase_dim
+        policy_critic_obs_dim = original_critic_obs_dim + goal_dim + phase_dim
+
+        # Update env "knowledge" of obs dims (used by RSL-RL's init_storage)
+        # This is a bit of a hack, but common in how these runners are structured
+        self.env.num_observations = policy_obs_dim
+        self.env.num_critic_observations = policy_critic_obs_dim
+
+        actor_critic_class = eval(self.policy_cfg.pop("class_name"))  # ActorCritic
+        actor_critic: ActorCritic | ActorCriticRecurrent | ActorCriticMoE = (
+            actor_critic_class(
+                policy_obs_dim, policy_critic_obs_dim, self.env.num_actions, **self.policy_cfg
+            ).to(self.device)
+        )
+
+        # Initialize AMP components
+        self.amp_normalizer = Normalizer(num_original_amp_obs_dim, device=self.device)
+
+        # Discriminator input_dim = (original_amp_obs_dim * 2) + goal_dim
+        discriminator_input_dim = num_original_amp_obs_dim * 2 + goal_dim
         self.discriminator = Discriminator(
-            num_amp_obs
-            * 2,  # the discriminator takes in the concatenation of the current and next observation
+            discriminator_input_dim,
             self.discriminator_cfg["hidden_dims"],
             self.discriminator_cfg["reward_scale"],
             device=self.device,
@@ -181,30 +193,34 @@ class AMPOnPolicyRunner:
         self.alg: AMP_PPO = alg_class(
             actor_critic=actor_critic,
             discriminator=self.discriminator,
-            amp_data=amp_data,
+            amp_data=self.amp_data, # use self.amp_data
             amp_normalizer=self.amp_normalizer,
             device=self.device,
             **self.alg_cfg,
         )
         self.num_steps_per_env = self.cfg["num_steps_per_env"]
         self.save_interval = self.cfg["save_interval"]
+
+        # Empirical Normalization
         self.empirical_normalization = self.cfg["empirical_normalization"]
         if self.empirical_normalization:
             self.obs_normalizer = EmpiricalNormalization(
-                shape=[num_obs], until=1.0e8
+                shape=[policy_obs_dim], until=1.0e8 # Use new policy_obs_dim
             ).to(self.device)
             self.critic_obs_normalizer = EmpiricalNormalization(
-                shape=[num_critic_obs], until=1.0e8
+                shape=[policy_critic_obs_dim], until=1.0e8 # Use new policy_critic_obs_dim
             ).to(self.device)
         else:
-            self.obs_normalizer = torch.nn.Identity()  # no normalization
-            self.critic_obs_normalizer = torch.nn.Identity()  # no normalization
+            self.obs_normalizer = torch.nn.Identity()
+            self.critic_obs_normalizer = torch.nn.Identity()
+
         # init storage and model
+        # PPO's storage should use the new policy_obs_dim and policy_critic_obs_dim
         self.alg.init_storage(
             self.env.num_envs,
             self.num_steps_per_env,
-            [num_obs],
-            [num_critic_obs],
+            [policy_obs_dim],
+            [policy_critic_obs_dim],
             [self.env.num_actions],
         )
 
@@ -290,11 +306,19 @@ class AMPOnPolicyRunner:
             self.env.episode_length_buf = torch.randint_like(
                 self.env.episode_length_buf, high=int(self.env.max_episode_length)
             )
-        obs, extras = self.env.get_observations()
-        amp_obs = extras["observations"]["amp"]
-        critic_obs = extras["observations"].get("critic", obs)
-        obs, critic_obs = obs.to(self.device), critic_obs.to(self.device)
-        amp_obs = amp_obs.to(self.device)
+
+        # Fetch initial observations from the environment
+        obs_dict = self.env.get_observations()
+        current_original_obs = obs_dict["obs"].to(self.device)
+        current_amp_state_part = obs_dict["observations"]["amp"].to(self.device)
+        current_goal_vector = obs_dict["observations"]["goal_vector"].to(self.device)
+        current_phase_variable = obs_dict["observations"]["phase_variable"].to(self.device)
+
+        if "critic" in obs_dict["observations"]:
+            current_original_critic_obs = obs_dict["observations"]["critic"].to(self.device)
+        else:
+            current_original_critic_obs = current_original_obs
+
         self.train_mode()  # switch to train mode (for dropout for example)
 
         ep_infos = []
@@ -318,43 +342,65 @@ class AMPOnPolicyRunner:
 
             with torch.inference_mode():
                 for i in range(self.num_steps_per_env):
-                    actions = self.alg.act(obs, critic_obs)
-                    self.alg.act_amp(amp_obs)
-                    obs, rewards, dones, infos = self.env.step(actions)
-                    _, extras = self.env.get_observations()
-                    next_amp_obs = extras["observations"]["amp"]
-                    obs = self.obs_normalizer(obs)
-                    if "critic" in infos["observations"]:
-                        critic_obs = self.critic_obs_normalizer(
-                            infos["observations"]["critic"]
-                        )
+                    # Construct policy inputs
+                    policy_input_obs = torch.cat([current_original_obs, current_goal_vector, current_phase_variable], dim=-1)
+                    policy_input_critic_obs = torch.cat([current_original_critic_obs, current_goal_vector, current_phase_variable], dim=-1) # Assuming critic also sees goal and phase
+
+                    # Normalize policy inputs before passing to act
+                    normalized_policy_obs = self.obs_normalizer(policy_input_obs)
+                    normalized_policy_critic_obs = self.critic_obs_normalizer(policy_input_critic_obs)
+
+                    actions = self.alg.act(normalized_policy_obs, normalized_policy_critic_obs)
+                    # AMP action processing - PPO needs to be updated to handle goal_vector
+                    self.alg.act_amp(current_amp_state_part, current_goal_vector)
+
+                    new_obs_dict, task_rewards, dones, infos = self.env.step(actions)
+
+                    # Extract next state components
+                    next_original_obs = new_obs_dict["obs"].to(self.device)
+                    next_amp_state_part = new_obs_dict["observations"]["amp"].to(self.device)
+                    next_goal_vector = new_obs_dict["observations"]["goal_vector"].to(self.device) # Usually same as current unless goal changes
+                    next_phase_variable = new_obs_dict["observations"]["phase_variable"].to(self.device)
+                    if "critic" in new_obs_dict["observations"]:
+                        next_original_critic_obs = new_obs_dict["observations"]["critic"].to(self.device)
                     else:
-                        critic_obs = obs
-                    obs, critic_obs, rewards, dones = (
-                        obs.to(self.device),
-                        critic_obs.to(self.device),
-                        rewards.to(self.device),
-                        dones.to(self.device),
-                    )
-                    next_amp_obs = next_amp_obs.to(self.device)
+                        next_original_critic_obs = next_original_obs
 
-                    # Process the AMP reward
+                    task_rewards = task_rewards.to(self.device)
+                    dones = dones.to(self.device)
+
+                    # Process the AMP reward (style reward)
+                    # Assumes predict_reward signature is (self, state_part, next_state_part, goal, normalizer)
                     style_rewards = self.discriminator.predict_reward(
-                        amp_obs, next_amp_obs, normalizer=self.amp_normalizer
+                        current_amp_state_part, next_amp_state_part, current_goal_vector, normalizer=self.amp_normalizer
                     )
 
-                    mean_task_reward_log += rewards.mean().item()
+                    mean_task_reward_log += task_rewards.mean().item()
                     mean_style_reward_log += style_rewards.mean().item()
 
-                    # Combine the task and style rewards (TODO this can be a hyperparameters)
-                    rewards = 0.5 * rewards + 0.5 * style_rewards
+                    # Combine the task and style rewards
+                    rewards = 0.5 * task_rewards + 0.5 * style_rewards
+
+                    # PPO storage uses normalized observations if empirical normalization is on.
+                    # However, RSL-RL's PPO stores the observation that `act` was called with.
+                    # process_env_step should handle what's stored.
+                    # If empirical_normalization, obs_normalizer.update should be called with policy_input_obs.
+                    if self.empirical_normalization:
+                        self.obs_normalizer.update(policy_input_obs)
+                        self.critic_obs_normalizer.update(policy_input_critic_obs)
 
                     self.alg.process_env_step(rewards, dones, infos)
-                    self.alg.process_amp_step(next_amp_obs)
+                    # PPO process_amp_step needs to be updated to handle goal_vector
+                    self.alg.process_amp_step(next_amp_state_part, current_goal_vector)
 
-                    # The next observation becomes the current observation for the next step
-                    amp_obs = torch.clone(next_amp_obs)
+                    # Update current state variables for the next iteration
+                    current_original_obs = next_original_obs
+                    current_original_critic_obs = next_original_critic_obs
+                    current_amp_state_part = next_amp_state_part
+                    current_goal_vector = next_goal_vector
+                    current_phase_variable = next_phase_variable
 
+                    # For logging, use combined rewards
                     if self.log_dir is not None:
                         # Book keeping
                         # note: we changed logging to use "log" instead of "episode" to avoid confusion with
@@ -363,7 +409,7 @@ class AMPOnPolicyRunner:
                             ep_infos.append(infos["episode"])
                         elif "log" in infos:
                             ep_infos.append(infos["log"])
-                        cur_reward_sum += rewards
+                        cur_reward_sum += rewards # Use combined rewards for logging
                         cur_episode_length += 1
                         new_ids = (dones > 0).nonzero(as_tuple=False)
                         rewbuffer.extend(
@@ -380,7 +426,10 @@ class AMPOnPolicyRunner:
 
                 # Learning step
                 start = stop
-                self.alg.compute_returns(critic_obs)
+                # Construct critic_obs for compute_returns, it should be the *next* critic obs, normalized
+                next_policy_input_critic_obs = torch.cat([current_original_critic_obs, current_goal_vector, current_phase_variable], dim=-1)
+                normalized_next_policy_critic_obs = self.critic_obs_normalizer(next_policy_input_critic_obs)
+                self.alg.compute_returns(normalized_next_policy_critic_obs)
 
             mean_style_reward_log /= self.num_steps_per_env
             mean_task_reward_log /= self.num_steps_per_env
@@ -391,11 +440,11 @@ class AMPOnPolicyRunner:
                 mean_surrogate_loss,
                 mean_amp_loss,
                 mean_grad_pen_loss,
-                mean_policy_pred,
-                mean_expert_pred,
-                mean_accuracy_policy,
-                mean_accuracy_expert,
-            ) = self.alg.update()
+                mean_policy_pred, # This comes from PPO update
+                mean_expert_pred, # This comes from PPO update
+                mean_accuracy_policy, # This comes from PPO update
+                mean_accuracy_expert, # This comes from PPO update
+            ) = self.alg.update() # PPO update needs to handle new obs structure if it uses stored obs for GAE
             stop = time.time()
             learn_time = stop - start
             self.current_learning_iteration = it
@@ -404,7 +453,7 @@ class AMPOnPolicyRunner:
             if it % self.save_interval == 0:
                 self.save(os.path.join(self.log_dir, f"model_{it}.pt"), save_onnx=True)
             ep_infos.clear()
-            if it == start_iter:
+            if it == start_iter: # Save code state only on the first iteration pass
                 # obtain all the diff files
                 git_file_paths = store_code_state(self.log_dir, self.git_status_repos)
                 # if possible store them to wandb
