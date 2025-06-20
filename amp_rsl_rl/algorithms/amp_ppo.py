@@ -59,7 +59,7 @@ class AMP_PPO:
         Maximum gradient norm for clipping gradients during backpropagation.
     use_clipped_value_loss : bool, default=True
         Flag indicating whether to use a clipped value loss, as in the original PPO implementation.
-    use_smooth_ratio_clipping : bool, default=FalseAdd comment
+    use_smooth_ratio_clipping : bool, default=False
         Flag indicating whether to apply smooth (exponential) clipping to the PPO policy ratio.
     schedule : str, default="fixed"
         Learning rate schedule mode ("fixed" or "adaptive" based on KL divergence).
@@ -148,7 +148,7 @@ class AMP_PPO:
         self.lam: float = lam
         self.max_grad_norm: float = max_grad_norm
         self.use_clipped_value_loss: bool = use_clipped_value_loss
-        self.use_smooth_ratio_clipping = use_smooth_ratio_clipping
+        self.use_smooth_ratio_clipping: bool = use_smooth_ratio_clipping
 
     def init_storage(
         self,
