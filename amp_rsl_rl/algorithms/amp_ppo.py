@@ -138,7 +138,6 @@ class AMP_PPO:
         ]
         self.optimizer: optim.Adam = optim.Adam(params, lr=learning_rate)
         self.transition: RolloutStorage.Transition = RolloutStorage.Transition()
-
         # PPO-specific parameters
         self.clip_param: float = clip_param
         self.num_learning_epochs: int = num_learning_epochs
@@ -149,7 +148,7 @@ class AMP_PPO:
         self.lam: float = lam
         self.max_grad_norm: float = max_grad_norm
         self.use_clipped_value_loss: bool = use_clipped_value_loss
-        self.use_smooth_clamped_loss = use_smooth_clamped_loss
+        self.use_smooth_clamping = use_smooth_clamping
 
     def init_storage(
         self,
