@@ -177,6 +177,14 @@ class AMPOnPolicyRunner:
 
         # Initialize the PPO algorithm
         alg_class = eval(self.alg_cfg.pop("class_name"))  # AMP_PPO
+        # This remove from alg_cfg fields that are not in AMP_PPO but are introduced in rsl_rl 2.2.3 PPO
+        # normalize_advantage_per_mini_batch=False,
+        # rnd_cfg: dict | None = None,
+        # symmetry_cfg: dict | None = None,
+        # multi_gpu_cfg: dict | None = None,
+        for key in list(self.alg_cfg.keys()):
+            if key not in AMP_PPO.__init__.__code__.co_varnames:
+                self.alg_cfg.pop(key)
 
         self.alg: AMP_PPO = alg_class(
             actor_critic=actor_critic,

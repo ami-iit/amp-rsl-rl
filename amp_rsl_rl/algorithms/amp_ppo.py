@@ -138,7 +138,6 @@ class AMP_PPO:
         ]
         self.optimizer: optim.Adam = optim.Adam(params, lr=learning_rate)
         self.transition: RolloutStorage.Transition = RolloutStorage.Transition()
-
         # PPO-specific parameters
         self.clip_param: float = clip_param
         self.num_learning_epochs: int = num_learning_epochs
@@ -459,8 +458,7 @@ class AMP_PPO:
 
             min_ = 1.0 - self.clip_param
             max_ = 1.0 + self.clip_param
-
-            # Smooth clamping for the ratio if enabled.
+            # Smooth clipping for the ratio if enabled.
             if self.use_smooth_ratio_clipping:
                 clipped_ratio = (
                     1
