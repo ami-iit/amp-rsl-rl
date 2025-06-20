@@ -281,7 +281,7 @@ class AMPLoader:
         slerp = Slerp(original_keyframes, tmp)
         return slerp(target_keyframes)
 
-    def _compute_ang_vel_derivative(
+    def _compute_ang_vel(
         self,
         data: List[Rotation],
         dt: float,
@@ -291,10 +291,10 @@ class AMPLoader:
         R_next = data[1:]
 
         if local:
-            # ΔR_body = R_i⁻¹ · R_{i+1}
+            # Exp = R_i⁻¹ · R_{i+1}
             rel = R_prev.inv() * R_next
         else:
-            # ΔR_inertial = R_{i+1} · R_i⁻¹
+            # Exp = R_{i+1} · R_i⁻¹
             rel = R_next * R_prev.inv()
 
         # Log-map to rotation vectors and divide by Δt
@@ -361,7 +361,7 @@ class AMPLoader:
             resampled_base_positions, simulation_dt
         )
 
-        resampled_base_ang_vel_mixed = self._compute_ang_vel_derivative(
+        resampled_base_ang_vel_mixed = self._compute_ang_vel(
             resampled_base_orientations, simulation_dt, local=False
         )
 
@@ -373,7 +373,7 @@ class AMPLoader:
                 )
             ]
         )
-        resampled_base_ang_vel_local = self._compute_ang_vel_derivative(
+        resampled_base_ang_vel_local = self._compute_ang_vel(
             resampled_base_orientations, simulation_dt, local=True
         )
 
