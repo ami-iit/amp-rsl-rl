@@ -318,7 +318,7 @@ class AMP_PPO:
         torch.Tensor
             The computed policy loss.
         """
-        expected = torch.zeros_like(discriminator_output).to(self.device)
+        expected = torch.zeros_like(discriminator_output, device=self.device)
         return self.discriminator_loss(discriminator_output, expected)
 
     def discriminator_expert_loss(
@@ -338,7 +338,7 @@ class AMP_PPO:
         torch.Tensor
             The computed expert loss.
         """
-        expected = torch.ones_like(discriminator_output).to(self.device)
+        expected = torch.ones_like(discriminator_output, device=self.device)
         return self.discriminator_loss(discriminator_output, expected)
 
     def update(self) -> Tuple[float, float, float, float, float, float, float, float]:
