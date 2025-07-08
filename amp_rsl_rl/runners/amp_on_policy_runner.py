@@ -146,8 +146,7 @@ class AMPOnPolicyRunner:
                 num_obs, num_critic_obs, self.env.num_actions, **self.policy_cfg
             ).to(self.device)
         )
-
-        actuated_joint_names = self.env.cfg.actions.joint_positions.joint_names
+        amp_joint_names = self.env.cfg.observations.amp.joint_pos.params['asset_cfg'].joint_names
 
         delta_t = self.env.cfg.sim.dt * self.env.cfg.decimation
 
@@ -160,7 +159,7 @@ class AMPOnPolicyRunner:
             self.cfg["dataset_weights"],
             delta_t,
             self.cfg["slow_down_factor"],
-            actuated_joint_names,
+            amp_joint_names,
         )
 
         # self.env.unwrapped.scene["robot"].joint_names)
