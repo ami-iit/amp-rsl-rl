@@ -146,6 +146,7 @@ class AMPOnPolicyRunner:
                 num_obs, num_critic_obs, self.env.num_actions, **self.policy_cfg
             ).to(self.device)
         )
+        # NOTE: to use this we need to configure the observations in the env coherently with amp observation. Tested with Manager Based envs in Isaaclab
         amp_joint_names = self.env.cfg.observations.amp.joint_pos.params['asset_cfg'].joint_names
 
         delta_t = self.env.cfg.sim.dt * self.env.cfg.decimation
