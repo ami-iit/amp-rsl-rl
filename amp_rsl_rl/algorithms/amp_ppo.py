@@ -104,8 +104,6 @@ class AMP_PPO:
         # Set up the discriminator and move it to the appropriate device.
         self.discriminator: Discriminator = discriminator.to(self.device)
         self.amp_transition: RolloutStorage.Transition = RolloutStorage.Transition()
-        self.discriminator_loss = torch.nn.BCEWithLogitsLoss()
-
         # Determine observation dimension used in the replay buffer.
         # The discriminator expects concatenated observations, so the replay buffer uses half the dimension.
         obs_dim: int = self.discriminator.input_dim // 2
@@ -301,46 +299,6 @@ class AMP_PPO:
         last_values = self.actor_critic.evaluate(last_critic_obs).detach()
         self.storage.compute_returns(last_values, self.gamma, self.lam)
 
-    def discriminator_policy_loss(
-        self, discriminator_output: torch.Tensor
-    ) -> torch.Tensor:
-        """
-        Computes the loss for the discriminator when classifying policy-generated transitions.
-        Uses binary cross-entropy loss where the target label for policy transitions is 0.
-
-        Parameters
-        ----------
-        discriminator_output : torch.Tensor
-            The raw logits output from the discriminator for policy data.
-
-        Returns
-        -------
-        torch.Tensor
-            The computed policy loss.
-        """
-        expected = torch.zeros_like(discriminator_output, device=self.device)
-        return self.discriminator_loss(discriminator_output, expected)
-
-    def discriminator_expert_loss(
-        self, discriminator_output: torch.Tensor
-    ) -> torch.Tensor:
-        """
-        Computes the loss for the discriminator when classifying expert transitions.
-        Uses binary cross-entropy loss where the target label for expert transitions is 1.
-
-        Parameters
-        ----------
-        discriminator_output : torch.Tensor
-            The raw logits output from the discriminator for expert data.
-
-        Returns
-        -------
-        torch.Tensor
-            The computed expert loss.
-        """
-        expected = torch.ones_like(discriminator_output, device=self.device)
-        return self.discriminator_loss(discriminator_output, expected)
-
     def update(self) -> Tuple[float, float, float, float, float, float, float, float]:
         """
         Performs a single update step for both the actor-critic (PPO) and the AMP discriminator.
@@ -517,16 +475,9 @@ class AMP_PPO:
                 discriminator_output[B_pol:],
             )
 
-            # Compute discriminator losses for expert and policy data.
-            expert_loss = self.discriminator_expert_loss(expert_d)
-            policy_loss = self.discriminator_policy_loss(policy_d)
-
-            # AMP loss is the average of expert and policy losses.
-            amp_loss = 0.5 * (expert_loss + policy_loss)
-
-            # Compute gradient penalty to stabilize discriminator training.
-            grad_pen_loss = self.discriminator.compute_grad_pen(
-                *sample_amp_expert, lambda_=10
+            # Compute discriminator losses
+            amp_loss, grad_pen_loss = self.discriminator.compute_loss(
+                policy_d, expert_d, sample_amp_expert, sample_amp_policy, lambda_=10
             )
 
             # The final loss combines the PPO loss with AMP losses.
