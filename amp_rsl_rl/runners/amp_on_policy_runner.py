@@ -403,6 +403,7 @@ class AMPOnPolicyRunner:
                 mean_expert_pred,
                 mean_accuracy_policy,
                 mean_accuracy_expert,
+                mean_kl_divergence,
             ) = self.alg.update()
             stop = time.time()
             learn_time = stop - start
@@ -480,6 +481,9 @@ class AMPOnPolicyRunner:
         )
 
         self.writer.add_scalar("Loss/learning_rate", self.alg.learning_rate, locs["it"])
+        self.writer.add_scalar(
+            "Loss/mean_kl_divergence", locs["mean_kl_divergence"], locs["it"]
+        )
         self.writer.add_scalar("Policy/mean_noise_std", mean_std.item(), locs["it"])
         self.writer.add_scalar("Perf/total_fps", fps, locs["it"])
         self.writer.add_scalar(

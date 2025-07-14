@@ -365,6 +365,7 @@ class AMP_PPO:
         mean_accuracy_expert: float = 0.0
         mean_accuracy_policy_elem: float = 0.0
         mean_accuracy_expert_elem: float = 0.0
+        mean_kl_divergence: float = 0.0
 
         # Create data generators for mini-batch sampling.
         if self.actor_critic.is_recurrent:
@@ -441,6 +442,7 @@ class AMP_PPO:
                         axis=-1,
                     )
                     kl_mean = torch.mean(kl)
+                    mean_kl_divergence += kl_mean.item()
 
                     if kl_mean > self.desired_kl * 2.0:
                         self.learning_rate = max(1e-5, self.learning_rate / 1.5)
@@ -577,6 +579,7 @@ class AMP_PPO:
         mean_expert_pred /= num_updates
         mean_accuracy_policy /= mean_accuracy_policy_elem
         mean_accuracy_expert /= mean_accuracy_expert_elem
+        mean_kl_divergence /= num_updates
 
         # Clear the storage for the next update cycle.
         self.storage.clear()
@@ -590,4 +593,5 @@ class AMP_PPO:
             mean_expert_pred,
             mean_accuracy_policy,
             mean_accuracy_expert,
+            mean_kl_divergence,
         )
