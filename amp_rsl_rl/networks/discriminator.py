@@ -101,8 +101,8 @@ class Discriminator(nn.Module):
             discriminator_logit = self.forward(torch.cat([state, next_state], dim=-1))
 
             if self.loss_type == "wgan":
-                discriminator_logit = torch.tanh(self.eta_wgan * discriminator_logit)
-                return torch.exp(self.reward_scale * discriminator_logit).squeeze()
+                discriminator_logit = torch.tanh(self.eta_wgan * discriminator_logit / discriminator_logit.std())
+                return self.reward_scale * torch.exp(discriminator_logit).squeeze()
 
             prob = torch.sigmoid(discriminator_logit)
             # Avoid log(0) by clamping the input to a minimum threshold
