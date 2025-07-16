@@ -168,11 +168,11 @@ class AMPOnPolicyRunner:
         # amp_data = AMPLoader(num_amp_obs, self.device)
         self.amp_normalizer = Normalizer(num_amp_obs, device=self.device)
         self.discriminator = Discriminator(
-            num_amp_obs
-            * 2,  # the discriminator takes in the concatenation of the current and next observation
-            self.discriminator_cfg["hidden_dims"],
-            self.discriminator_cfg["reward_scale"],
+            input_dim=num_amp_obs* 2,  # the discriminator takes in the concatenation of the current and next observation
+            hidden_layer_sizes=self.discriminator_cfg["hidden_dims"],
+            reward_scale=self.discriminator_cfg["reward_scale"],
             device=self.device,
+            loss_type=self.discriminator_cfg["loss_type"],
         ).to(self.device)
 
         # Initialize the PPO algorithm
@@ -610,7 +610,9 @@ class AMPOnPolicyRunner:
                 )
 
     def load(self, path, load_optimizer=True, weights_only=False):
-        loaded_dict = torch.load(path, map_location=self.device, weights_only=weights_only)
+        loaded_dict = torch.load(
+            path, map_location=self.device, weights_only=weights_only
+        )
         self.alg.actor_critic.load_state_dict(loaded_dict["model_state_dict"])
         self.alg.discriminator.load_state_dict(loaded_dict["discriminator_state_dict"])
         self.alg.amp_normalizer = loaded_dict["amp_normalizer"]
