@@ -8,6 +8,7 @@
 import copy
 import os
 import torch
+from amp_rsl_rl.networks import ActorMoE
 
 
 def export_policy_as_onnx(
@@ -135,7 +136,10 @@ class _OnnxPolicyExporter(torch.nn.Module):
                 dynamic_axes={},
             )
         else:
-            obs = torch.zeros(1, self.actor[0].in_features)
+            if isinstance(self.actor, ActorMoE):
+                obs = torch.zeros(1, self.actor.obs_dim)
+            else:
+                obs = torch.zeros(1, self.actor[0].in_features)
             torch.onnx.export(
                 self,
                 obs,
