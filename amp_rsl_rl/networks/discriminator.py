@@ -51,15 +51,15 @@ class Discriminator(nn.Module):
 
         self.trunk.train()
         self.linear.train()
-        self.loss_type = loss_type
-        if loss_type == "BCEWithLogits":
+        self.loss_type = loss_type if loss_type is not None else "BCEWithLogits"
+        if self.loss_type == "BCEWithLogits":
             self.loss_fun = torch.nn.BCEWithLogitsLoss()
-        elif loss_type == "wgan":
+        elif self.loss_type == "wgan":
             self.loss_fun = None
             self.eta_wgan = eta_wgan
         else:
             raise ValueError(
-                f"Unsupported loss type: {loss_type}. Supported types are 'BCEWithLogits' and 'wgan'."
+                f"Unsupported loss type: {self.loss_type}. Supported types are 'BCEWithLogits' and 'wgan'."
             )
         # self.loss_fun = torch.nn.BCEWithLogitsLoss()
 
@@ -75,7 +75,6 @@ class Discriminator(nn.Module):
         h = self.trunk(x)
         d = self.linear(h)
         return d
-
 
     def predict_reward(
         self,
@@ -101,7 +100,9 @@ class Discriminator(nn.Module):
             discriminator_logit = self.forward(torch.cat([state, next_state], dim=-1))
 
             if self.loss_type == "wgan":
-                discriminator_logit = torch.tanh(self.eta_wgan * discriminator_logit / discriminator_logit.std())
+                discriminator_logit = torch.tanh(
+                    self.eta_wgan * discriminator_logit / discriminator_logit.std()
+                )
                 return self.reward_scale * torch.exp(discriminator_logit).squeeze()
 
             prob = torch.sigmoid(discriminator_logit)
