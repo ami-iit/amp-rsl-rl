@@ -54,12 +54,13 @@ class Discriminator(nn.Module):
         self.loss_type = loss_type if loss_type is not None else "BCEWithLogits"
         if self.loss_type == "BCEWithLogits":
             self.loss_fun = torch.nn.BCEWithLogitsLoss()
-        elif self.loss_type == "wgan":
+        elif self.loss_type == "Wasserstein":
             self.loss_fun = None
             self.eta_wgan = eta_wgan
+            print("The Wasserstein-like loss is experimental")
         else:
             raise ValueError(
-                f"Unsupported loss type: {self.loss_type}. Supported types are 'BCEWithLogits' and 'wgan'."
+                f"Unsupported loss type: {self.loss_type}. Supported types are 'BCEWithLogits' and 'Wasserstein'."
             )
         # self.loss_fun = torch.nn.BCEWithLogitsLoss()
 
@@ -99,10 +100,8 @@ class Discriminator(nn.Module):
 
             discriminator_logit = self.forward(torch.cat([state, next_state], dim=-1))
 
-            if self.loss_type == "wgan":
-                discriminator_logit = torch.tanh(
-                    self.eta_wgan * discriminator_logit / discriminator_logit.std()
-                )
+            if self.loss_type == "Wasserstein":
+                discriminator_logit = torch.tanh(self.eta_wgan * discriminator_logit)
                 return self.reward_scale * torch.exp(discriminator_logit).squeeze()
 
             prob = torch.sigmoid(discriminator_logit)
@@ -173,7 +172,7 @@ class Discriminator(nn.Module):
             policy_loss = self.loss_fun(policy_d, torch.zeros_like(policy_d))
             # AMP loss is the average of expert and policy losses.
             amp_loss = 0.5 * (expert_loss + policy_loss)
-        elif self.loss_type == "wgan":
+        elif self.loss_type == "Wasserstein":
             amp_loss = self.wgan_loss(policy_d=policy_d, expert_d=expert_d)
         return amp_loss, grad_pen_loss
 
@@ -195,7 +194,7 @@ class Discriminator(nn.Module):
         """
         expert = torch.cat(expert_states, -1)
 
-        if self.loss_type == "wgan":
+        if self.loss_type == "Wasserstein":
             policy = torch.cat(policy_states, -1)
             alpha = torch.rand(expert.size(0), 1, device=expert.device)
             data = alpha * expert + (1 - alpha) * policy
@@ -205,7 +204,7 @@ class Discriminator(nn.Module):
             offset = 0
         else:
             raise ValueError(
-                f"Unsupported loss type: {self.loss_type}. Supported types are 'BCEWithLogits' and 'wgan'."
+                f"Unsupported loss type: {self.loss_type}. Supported types are 'BCEWithLogits' and 'Wasserstein'."
             )
 
         data.requires_grad = True
@@ -223,7 +222,9 @@ class Discriminator(nn.Module):
 
     def wgan_loss(self, policy_d, expert_d):
         """
-        Wasserstein critic loss (to *minimize*):
+        This loss function computes a modified Wasserstein loss for the discriminator.
+        The original Wasserstein loss is D(policy) - D(expert), but here we apply a tanh
+        transformation to the discriminator outputs scaled by eta_wgan. This helps in stabilizing the training.
         Args:
             policy_d (Tensor): Discriminator output for policy data.
             expert_d (Tensor): Discriminator output for expert data.
