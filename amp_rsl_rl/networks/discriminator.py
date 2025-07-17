@@ -62,7 +62,6 @@ class Discriminator(nn.Module):
             raise ValueError(
                 f"Unsupported loss type: {self.loss_type}. Supported types are 'BCEWithLogits' and 'Wasserstein'."
             )
-        # self.loss_fun = torch.nn.BCEWithLogitsLoss()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass through the discriminator.
