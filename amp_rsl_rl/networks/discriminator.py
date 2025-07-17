@@ -184,8 +184,8 @@ class Discriminator(nn.Module):
         """Computes the gradient penalty used to regularize the discriminator.
 
         Args:
-            expert_state (Tensor): Batch of expert states.
-            expert_next_state (Tensor): Batch of expert next states.
+            expert_states (tuple[Tensor, Tensor]): A tuple containing batches of expert states and expert next states.
+            policy_states (tuple[Tensor, Tensor]): A tuple containing batches of policy states and policy next states.
             lambda_ (float): Penalty coefficient.
 
         Returns:
