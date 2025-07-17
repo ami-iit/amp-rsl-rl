@@ -7,5 +7,7 @@
 """Implementation of the network for the AMP algorithm."""
 
 from .discriminator import Discriminator
+from .ac_moe import ActorMoE
+from .ac_moe_old import ActorCriticMoE
 
-__all__ = ["Discriminator"]
+__all__ = ["Discriminator", "ActorCriticMoE", "ActorMoE"]
