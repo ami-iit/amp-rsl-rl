@@ -217,7 +217,6 @@ class Discriminator(nn.Module):
             retain_graph=True,
             only_inputs=True,
         )[0]
-        # return 1 * (grad.norm(2, dim=1) - offset).pow(2).mean()
         return lambda_ * (grad.norm(2, dim=1) - offset).pow(2).mean()
 
     def wgan_loss(self, policy_d, expert_d):
