@@ -31,10 +31,10 @@ class ActorMoE(nn.Module):
         gate_hidden_dims: list[int] | None = None,
         activation="elu",
     ):
+        super().__init__()
         self.obs_dim = obs_dim
         self.act_dim = act_dim
         self.num_experts = num_experts
-        super().__init__()
         act = resolve_nn_activation(activation)
 
         # experts
