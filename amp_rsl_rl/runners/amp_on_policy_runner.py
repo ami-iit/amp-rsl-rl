@@ -23,7 +23,7 @@ from rsl_rl.utils import store_code_state
 from amp_rsl_rl.utils import Normalizer
 from amp_rsl_rl.utils import AMPLoader
 from amp_rsl_rl.algorithms import AMP_PPO
-from amp_rsl_rl.networks import Discriminator
+from amp_rsl_rl.networks import Discriminator, ActorCriticMoE
 from amp_rsl_rl.utils import export_policy_as_onnx
 
 
