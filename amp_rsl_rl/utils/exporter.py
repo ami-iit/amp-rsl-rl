@@ -136,10 +136,11 @@ class _OnnxPolicyExporter(torch.nn.Module):
                 dynamic_axes={},
             )
         else:
-            if isinstance(self.actor, ActorMoE):
-                obs = torch.zeros(1, self.actor.obs_dim)
-            else:
-                obs = torch.zeros(1, self.actor[0].in_features)
+            obs = (
+                torch.zeros(1, self.actor.obs_dim)
+                if isinstance(self.actor, ActorMoE)
+                else torch.zeros(1, self.actor[0].in_features)
+            )
             torch.onnx.export(
                 self,
                 obs,
