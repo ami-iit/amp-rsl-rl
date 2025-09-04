@@ -89,8 +89,15 @@ class MotionData:
 
     def __post_init__(self) -> None:
         # Convert numpy arrays (or SciPy Rotations) to torch tensors
+
         def to_tensor(x):
-            return torch.tensor(x, device=self.device, dtype=torch.float32)
+            # Ensure positive strides / contiguous memory before converting to torch
+            if not isinstance(x, np.ndarray):
+                x = np.array(x, dtype=np.float32)
+            # Make contiguous and float32 without copying if already OK
+            x = np.ascontiguousarray(x, dtype=np.float32)
+            return torch.from_numpy(x).to(self.device)
+
 
         if isinstance(self.joint_positions, np.ndarray):
             self.joint_positions = to_tensor(self.joint_positions)
@@ -361,7 +368,9 @@ class AMPLoader:
         data_2d = data if data.ndim == 2 else data[:, None]
         # filtfilt is along axis=0 (time)
         filtered = filtfilt(b, a, data_2d, axis=0, method="pad")
+        filtered = np.ascontiguousarray(filtered)  # ensure positive strides
         return filtered if data.ndim == 2 else filtered[:, 0]
+
 
     def load_data(
         self,
