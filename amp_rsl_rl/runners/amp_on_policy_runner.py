@@ -354,8 +354,8 @@ class AMPOnPolicyRunner:
                     mean_task_reward_log += rewards.mean().item()
                     mean_style_reward_log += style_rewards.mean().item()
 
-                    # Combine the task and style rewards (TODO this can be a hyperparameters)
-                    rewards = 0.5 * rewards + 0.5 * style_rewards
+                    # Combine the task and style rewards
+                    rewards = self.cfg['task_reward_weight'] * rewards + self.cfg['style_reward_weight'] * style_rewards
 
                     self.alg.process_env_step(rewards, dones, infos)
                     self.alg.process_amp_step(next_amp_obs)
