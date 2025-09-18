@@ -18,7 +18,12 @@ import rsl_rl
 import rsl_rl.utils
 from rsl_rl.env import VecEnv
 from rsl_rl.modules import ActorCritic, ActorCriticRecurrent, EmpiricalNormalization
-from rsl_rl.utils import store_code_state
+try:
+    from rsl_rl.utils import store_code_state  # rsl_rl <= v2.x
+except Exception:
+    # rsl_rl >= v3 might not expose store_code_state; define a no-op fallback
+    def store_code_state(*args, **kwargs):  # type: ignore
+        return []
 
 from amp_rsl_rl.utils import Normalizer
 from amp_rsl_rl.utils import AMPLoader

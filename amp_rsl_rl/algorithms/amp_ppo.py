@@ -327,7 +327,8 @@ class AMP_PPO:
 
         # Create data generators for mini-batch sampling.
         if self.actor_critic.is_recurrent:
-            generator = self.storage.reccurent_mini_batch_generator(
+            # rsl_rl v3 uses the correctly spelled 'recurrent_mini_batch_generator'
+            generator = self.storage.recurrent_mini_batch_generator(
                 self.num_mini_batches, self.num_learning_epochs
             )
         else:
@@ -397,7 +398,7 @@ class AMP_PPO:
                         )
                         / (2.0 * torch.square(sigma_batch))
                         - 0.5,
-                        axis=-1,
+                        dim=-1,
                     )
                     kl_mean = torch.mean(kl)
                     mean_kl_divergence += kl_mean.item()
