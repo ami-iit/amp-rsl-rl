@@ -135,15 +135,50 @@ class AMPOnPolicyRunner:
 
         # Get the size of the observation space
         obs, extras = self.env.get_observations()
-        num_obs = obs.shape[1]
-        if "critic" in extras["observations"]:
-            num_critic_obs = extras["observations"]["critic"].shape[1]
+        
+        # Handle both legacy and new TensorDict-based observation formats
+        if hasattr(obs, 'batch_size'):
+            # New TensorDict format (rsl_rl >= 3.0)
+            # Extract the main policy observation dimension
+            if "policy" in obs:
+                num_obs = obs["policy"].shape[1]
+            else:
+                # Fallback to the first observation type
+                first_key = list(obs.keys())[0]
+                num_obs = obs[first_key].shape[1]
+            
+            # Extract critic observation dimension
+            if "critic" in obs:
+                num_critic_obs = obs["critic"].shape[1]
+            elif "policy" in obs:
+                num_critic_obs = obs["policy"].shape[1]
+            else:
+                num_critic_obs = num_obs
         else:
-            num_critic_obs = num_obs
+            # Legacy tensor format (rsl_rl < 3.0)
+            num_obs = obs.shape[1]
+            if "critic" in extras["observations"]:
+                num_critic_obs = extras["observations"]["critic"].shape[1]
+            else:
+                num_critic_obs = num_obs
         actor_critic_class = eval(self.policy_cfg.pop("class_name"))  # ActorCritic
+        
+        # Handle compatibility with rsl_rl v3.x configuration changes
+        # In v3.x, actor_obs_normalization and critic_obs_normalization are separate
+        # In v2.x, there was empirical_normalization parameter
+        policy_cfg_copy = self.policy_cfg.copy()
+        
+        # Map old empirical_normalization to new format if needed
+        if "empirical_normalization" in policy_cfg_copy:
+            empirical_norm = policy_cfg_copy.pop("empirical_normalization")
+            if "actor_obs_normalization" not in policy_cfg_copy:
+                policy_cfg_copy["actor_obs_normalization"] = empirical_norm
+            if "critic_obs_normalization" not in policy_cfg_copy:
+                policy_cfg_copy["critic_obs_normalization"] = empirical_norm
+        
         actor_critic: ActorCritic | ActorCriticRecurrent | ActorCriticMoE = (
             actor_critic_class(
-                num_obs, num_critic_obs, self.env.num_actions, **self.policy_cfg
+                num_obs, num_critic_obs, self.env.num_actions, **policy_cfg_copy
             ).to(self.device)
         )
         # NOTE: to use this we need to configure the observations in the env coherently with amp observation. Tested with Manager Based envs in Isaaclab
@@ -151,8 +186,24 @@ class AMPOnPolicyRunner:
 
         delta_t = self.env.cfg.sim.dt * self.env.cfg.decimation
 
-        # Initilize all the ingredients required for AMP (discriminator, dataset loader)
-        num_amp_obs = extras["observations"]["amp"].shape[1]
+        # Initialize all the ingredients required for AMP (discriminator, dataset loader)
+        # Handle both legacy and new TensorDict-based observation formats for AMP
+        if hasattr(obs, 'batch_size'):
+            # New TensorDict format (rsl_rl >= 3.0)
+            if "amp" in obs:
+                num_amp_obs = obs["amp"].shape[1]
+            else:
+                # Fallback: try to get from extras
+                if "amp" in extras.get("observations", {}):
+                    num_amp_obs = extras["observations"]["amp"].shape[1]
+                else:
+                    raise ValueError("AMP observations not found in observation dict. Please ensure 'amp' key is present.")
+        else:
+            # Legacy tensor format (rsl_rl < 3.0)
+            if "amp" in extras["observations"]:
+                num_amp_obs = extras["observations"]["amp"].shape[1]
+            else:
+                raise ValueError("AMP observations not found in extras. Please ensure 'amp' key is present in observations.")
         amp_data = AMPLoader(
             self.device,
             self.cfg["amp_data_path"],
@@ -177,14 +228,26 @@ class AMPOnPolicyRunner:
 
         # Initialize the PPO algorithm
         alg_class = eval(self.alg_cfg.pop("class_name"))  # AMP_PPO
-        # This removes from alg_cfg fields that are not in AMP_PPO but are introduced in rsl_rl 2.2.3 PPO
-        # normalize_advantage_per_mini_batch=False,
-        # rnd_cfg: dict | None = None,
-        # symmetry_cfg: dict | None = None,
-        # multi_gpu_cfg: dict | None = None,
-        for key in list(self.alg_cfg.keys()):
-            if key not in AMP_PPO.__init__.__code__.co_varnames:
-                self.alg_cfg.pop(key)
+        
+        # Create a copy of alg_cfg for processing
+        alg_cfg_copy = self.alg_cfg.copy()
+        
+        # Handle compatibility with rsl_rl v3.x - remove fields that are not in AMP_PPO
+        # These fields were introduced in rsl_rl 2.2.3+ but may not be supported by AMP_PPO
+        fields_to_remove = [
+            "normalize_advantage_per_mini_batch",
+            "rnd_cfg", 
+            "symmetry_cfg",
+            "multi_gpu_cfg"
+        ]
+        
+        for key in fields_to_remove:
+            if key in alg_cfg_copy:
+                alg_cfg_copy.pop(key)
+        
+        # Additional cleanup: only keep fields that are actually in AMP_PPO.__init__
+        valid_fields = set(AMP_PPO.__init__.__code__.co_varnames)
+        filtered_cfg = {k: v for k, v in alg_cfg_copy.items() if k in valid_fields}
 
         self.alg: AMP_PPO = alg_class(
             actor_critic=actor_critic,
@@ -192,7 +255,7 @@ class AMPOnPolicyRunner:
             amp_data=amp_data,
             amp_normalizer=self.amp_normalizer,
             device=self.device,
-            **self.alg_cfg,
+            **filtered_cfg,
         )
         self.num_steps_per_env = self.cfg["num_steps_per_env"]
         self.save_interval = self.cfg["save_interval"]
@@ -299,10 +362,35 @@ class AMPOnPolicyRunner:
                 self.env.episode_length_buf, high=int(self.env.max_episode_length)
             )
         obs, extras = self.env.get_observations()
-        amp_obs = extras["observations"]["amp"]
-        critic_obs = extras["observations"].get("critic", obs)
-        obs, critic_obs = obs.to(self.device), critic_obs.to(self.device)
-        amp_obs = amp_obs.to(self.device)
+        
+        # Handle both legacy and new TensorDict-based observation formats
+        if hasattr(obs, 'batch_size'):
+            # New TensorDict format (rsl_rl >= 3.0)
+            # Extract observations for policy and critic
+            if "policy" in obs:
+                policy_obs = obs["policy"].to(self.device)
+            else:
+                # Use the first available observation
+                first_key = list(obs.keys())[0]
+                policy_obs = obs[first_key].to(self.device)
+            
+            if "critic" in obs:
+                critic_obs = obs["critic"].to(self.device)
+            else:
+                critic_obs = policy_obs
+            
+            if "amp" in obs:
+                amp_obs = obs["amp"].to(self.device)
+            else:
+                raise ValueError("AMP observations not found in observation dict")
+            
+            obs = policy_obs  # For backward compatibility
+        else:
+            # Legacy tensor format (rsl_rl < 3.0)
+            amp_obs = extras["observations"]["amp"]
+            critic_obs = extras["observations"].get("critic", obs)
+            obs, critic_obs = obs.to(self.device), critic_obs.to(self.device)
+            amp_obs = amp_obs.to(self.device)
         self.train_mode()  # switch to train mode (for dropout for example)
 
         ep_infos = []
@@ -328,16 +416,48 @@ class AMPOnPolicyRunner:
                 for i in range(self.num_steps_per_env):
                     actions = self.alg.act(obs, critic_obs)
                     self.alg.act_amp(amp_obs)
-                    obs, rewards, dones, infos = self.env.step(actions)
+                    step_obs, rewards, dones, infos = self.env.step(actions)
                     _, extras = self.env.get_observations()
-                    next_amp_obs = extras["observations"]["amp"]
+                    
+                    # Handle both legacy and new TensorDict-based observation formats
+                    if hasattr(step_obs, 'batch_size'):
+                        # New TensorDict format (rsl_rl >= 3.0)
+                        if "policy" in step_obs:
+                            obs = step_obs["policy"]
+                        else:
+                            first_key = list(step_obs.keys())[0]
+                            obs = step_obs[first_key]
+                        
+                        if "critic" in step_obs:
+                            critic_obs = step_obs["critic"]
+                        else:
+                            critic_obs = obs
+                        
+                        if "amp" in step_obs:
+                            next_amp_obs = step_obs["amp"]
+                        else:
+                            raise ValueError("AMP observations not found in step observations")
+                    else:
+                        # Legacy tensor format (rsl_rl < 3.0)
+                        obs = step_obs
+                        next_amp_obs = extras["observations"]["amp"]
+                        if "critic" in infos["observations"]:
+                            critic_obs = self.critic_obs_normalizer(
+                                infos["observations"]["critic"]
+                            )
+                        else:
+                            critic_obs = obs
+                    
                     obs = self.obs_normalizer(obs)
-                    if "critic" in infos["observations"]:
-                        critic_obs = self.critic_obs_normalizer(
-                            infos["observations"]["critic"]
-                        )
+                    if hasattr(step_obs, 'batch_size') and "critic" in step_obs:
+                        # Only normalize critic obs if it's separate from policy obs
+                        critic_obs = self.critic_obs_normalizer(critic_obs)
+                    elif not hasattr(step_obs, 'batch_size') and "critic" in infos["observations"]:
+                        # Legacy format
+                        critic_obs = self.critic_obs_normalizer(critic_obs)
                     else:
                         critic_obs = obs
+                        
                     obs, critic_obs, rewards, dones = (
                         obs.to(self.device),
                         critic_obs.to(self.device),
