@@ -42,9 +42,13 @@ The required dependencies include:
 - `numpy`
 - `scipy`
 - `torch`
-- `rsl-rl-lib`
+- `rsl-rl-lib>=3.0.1`
 
 These will be automatically installed via pip.
+
+### RSL-RL Compatibility
+
+This library is compatible with RSL-RL v3.0.1 and later. For users upgrading from RSL-RL v2.x, see [MIGRATION_RSL_RL_V3.md](MIGRATION_RSL_RL_V3.md) for details on the changes and backward compatibility features.
 
 ---
 
