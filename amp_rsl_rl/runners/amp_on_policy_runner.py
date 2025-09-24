@@ -259,8 +259,20 @@ class AMPOnPolicyRunner:
         )
         self.num_steps_per_env = self.cfg["num_steps_per_env"]
         self.save_interval = self.cfg["save_interval"]
-        self.empirical_normalization = self.cfg["empirical_normalization"]
-        if self.empirical_normalization:
+        
+        # Handle empirical normalization compatibility between rsl_rl v2.x and v3.x
+        # In v3.x, normalization is handled by the policy itself via actor_obs_normalization and critic_obs_normalization
+        # In v2.x, we had a separate empirical_normalization flag
+        self.empirical_normalization = self.cfg.get("empirical_normalization", False)
+        
+        # Check if the policy already handles normalization (v3.x style)
+        policy_handles_normalization = (
+            policy_cfg_copy.get("actor_obs_normalization", False) or 
+            policy_cfg_copy.get("critic_obs_normalization", False)
+        )
+        
+        if self.empirical_normalization and not policy_handles_normalization:
+            # Legacy mode: create separate normalizers for backward compatibility
             self.obs_normalizer = EmpiricalNormalization(
                 shape=[num_obs], until=1.0e8
             ).to(self.device)
@@ -268,9 +280,20 @@ class AMPOnPolicyRunner:
                 shape=[num_critic_obs], until=1.0e8
             ).to(self.device)
         else:
+            # New mode or no normalization: let the policy handle it or use identity
             self.obs_normalizer = torch.nn.Identity()  # no normalization
             self.critic_obs_normalizer = torch.nn.Identity()  # no normalization
         # init storage and model
+        # Handle observation groups configuration for rsl_rl v3.x compatibility
+        # In v3.x, observation groups map environment observation keys to algorithm observation sets
+        obs_groups = self.cfg.get("obs_groups", None)
+        if obs_groups is None:
+            # Default mapping for backward compatibility
+            obs_groups = {
+                "policy": ["policy"],
+                "critic": ["critic"] if "critic" in obs else ["policy"]
+            }
+            
         self.alg.init_storage(
             self.env.num_envs,
             self.num_steps_per_env,

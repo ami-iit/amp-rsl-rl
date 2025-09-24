@@ -188,12 +188,17 @@ class AMP_PPO:
         """
         Sets the actor-critic model to evaluation mode.
         """
-        self.actor_critic.test()
+        # Support both rsl_rl v2.x (test) and v3.x (eval) methods
+        if hasattr(self.actor_critic, 'test'):
+            self.actor_critic.test()
+        else:
+            self.actor_critic.eval()
 
     def train_mode(self) -> None:
         """
         Sets the actor-critic model to training mode.
         """
+        # Support both rsl_rl v2.x and v3.x - train() should be consistent
         self.actor_critic.train()
 
     def act(self, obs: torch.Tensor, critic_obs: torch.Tensor) -> torch.Tensor:
