@@ -133,26 +133,74 @@ class AMPOnPolicyRunner:
         self.device = device
         self.env = env
 
-        # Get the size of the observation space
+        # Get the observations from the environment
         obs, extras = self.env.get_observations()
-        num_obs = obs.shape[1]
-        if "critic" in extras["observations"]:
-            num_critic_obs = extras["observations"]["critic"].shape[1]
+        
+        # Set up observation groups for the new rsl-rl v3.x API
+        # Default observation groups for AMP (we need policy, critic, and amp)
+        default_obs_groups = {
+            "policy": ["policy"] if "policy" in obs else list(obs.keys())[:1],  # First obs group for policy
+            "critic": ["critic"] if "critic" in obs else ["policy"] if "policy" in obs else list(obs.keys())[:1],
+            "amp": ["amp"] if "amp" in obs else ["policy"] if "policy" in obs else list(obs.keys())[:1],
+        }
+        
+        # Merge with any existing obs_groups config
+        if "obs_groups" not in self.cfg:
+            self.cfg["obs_groups"] = default_obs_groups
         else:
-            num_critic_obs = num_obs
+            for key, value in default_obs_groups.items():
+                if key not in self.cfg["obs_groups"]:
+                    self.cfg["obs_groups"][key] = value
+        
+        # Import resolve_obs_groups from rsl_rl v3.x
+        try:
+            from rsl_rl.utils import resolve_obs_groups
+            self.cfg["obs_groups"] = resolve_obs_groups(obs, self.cfg["obs_groups"], ["critic", "amp"])
+        except ImportError:
+            # Fallback for older rsl-rl versions - use existing logic
+            num_obs = obs.shape[1] if hasattr(obs, 'shape') else obs[list(obs.keys())[0]].shape[1]
+            if "critic" in extras["observations"]:
+                num_critic_obs = extras["observations"]["critic"].shape[1]
+            else:
+                num_critic_obs = num_obs
+        
+        # Create the policy using the new API
         policy_class = eval(self.policy_cfg.pop("class_name"))  # ActorCritic
-        policy: ActorCritic | ActorCriticRecurrent | ActorCriticMoE = (
-            policy_class(
-                num_obs, num_critic_obs, self.env.num_actions, **self.policy_cfg
-            ).to(self.device)
-        )
+        try:
+            # Try new rsl-rl v3.x API first
+            policy: ActorCritic | ActorCriticRecurrent | ActorCriticMoE = (
+                policy_class(
+                    obs, self.cfg["obs_groups"], self.env.num_actions, **self.policy_cfg
+                ).to(self.device)
+            )
+        except TypeError:
+            # Fallback to old API if new constructor fails
+            policy: ActorCritic | ActorCriticRecurrent | ActorCriticMoE = (
+                policy_class(
+                    num_obs, num_critic_obs, self.env.num_actions, **self.policy_cfg
+                ).to(self.device)
+            )
         # NOTE: to use this we need to configure the observations in the env coherently with amp observation. Tested with Manager Based envs in Isaaclab
         amp_joint_names = self.env.cfg.observations.amp.joint_pos.params['asset_cfg'].joint_names
 
         delta_t = self.env.cfg.sim.dt * self.env.cfg.decimation
 
-        # Initilize all the ingredients required for AMP (discriminator, dataset loader)
-        num_amp_obs = extras["observations"]["amp"].shape[1]
+        # Initialize all the ingredients required for AMP (discriminator, dataset loader)
+        # Handle both new TensorDict format and legacy format
+        if hasattr(obs, 'keys') and callable(getattr(obs, 'keys')):
+            # New TensorDict format
+            if "amp" in obs:
+                num_amp_obs = obs["amp"].shape[1]
+            elif "amp" in extras["observations"]:
+                num_amp_obs = extras["observations"]["amp"].shape[1]
+            else:
+                raise ValueError("AMP observations not found in environment observations")
+        else:
+            # Legacy format
+            if "amp" in extras["observations"]:
+                num_amp_obs = extras["observations"]["amp"].shape[1]
+            else:
+                raise ValueError("AMP observations not found in environment observations")
         amp_data = AMPLoader(
             self.device,
             self.cfg["amp_data_path"],
@@ -452,7 +500,7 @@ class AMPOnPolicyRunner:
                 else:
                     self.writer.add_scalar("Episode/" + key, value, locs["it"])
                     ep_string += f"""{f'Mean episode {key}:':>{pad}} {value:.4f}\n"""
-        mean_std = self.alg.policy.std.mean()
+        mean_std = self.alg.policy.action_std.mean()
         fps = int(
             self.num_steps_per_env
             * self.env.num_envs
