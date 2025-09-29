@@ -140,9 +140,9 @@ class AMPOnPolicyRunner:
             num_critic_obs = extras["observations"]["critic"].shape[1]
         else:
             num_critic_obs = num_obs
-        actor_critic_class = eval(self.policy_cfg.pop("class_name"))  # ActorCritic
-        actor_critic: ActorCritic | ActorCriticRecurrent | ActorCriticMoE = (
-            actor_critic_class(
+        policy_class = eval(self.policy_cfg.pop("class_name"))  # ActorCritic
+        policy: ActorCritic | ActorCriticRecurrent | ActorCriticMoE = (
+            policy_class(
                 num_obs, num_critic_obs, self.env.num_actions, **self.policy_cfg
             ).to(self.device)
         )
@@ -187,7 +187,7 @@ class AMPOnPolicyRunner:
                 self.alg_cfg.pop(key)
 
         self.alg: AMP_PPO = alg_class(
-            actor_critic=actor_critic,
+            policy=policy,
             discriminator=self.discriminator,
             amp_data=amp_data,
             amp_normalizer=self.amp_normalizer,
@@ -452,7 +452,7 @@ class AMPOnPolicyRunner:
                 else:
                     self.writer.add_scalar("Episode/" + key, value, locs["it"])
                     ep_string += f"""{f'Mean episode {key}:':>{pad}} {value:.4f}\n"""
-        mean_std = self.alg.actor_critic.std.mean()
+        mean_std = self.alg.policy.std.mean()
         fps = int(
             self.num_steps_per_env
             * self.env.num_envs
@@ -572,7 +572,7 @@ class AMPOnPolicyRunner:
 
     def save(self, path, infos=None, save_onnx=False):
         saved_dict = {
-            "model_state_dict": self.alg.actor_critic.state_dict(),
+            "model_state_dict": self.alg.policy.state_dict(),
             "optimizer_state_dict": self.alg.optimizer.state_dict(),
             "discriminator_state_dict": self.alg.discriminator.state_dict(),
             "amp_normalizer": self.alg.amp_normalizer,
@@ -601,7 +601,7 @@ class AMPOnPolicyRunner:
             onnx_model_name = f"policy_{iteration}.onnx"
 
             export_policy_as_onnx(
-                self.alg.actor_critic,
+                self.alg.policy,
                 normalizer=self.obs_normalizer,
                 path=onnx_folder,
                 filename=onnx_model_name,
@@ -617,7 +617,7 @@ class AMPOnPolicyRunner:
         loaded_dict = torch.load(
             path, map_location=self.device, weights_only=weights_only
         )
-        self.alg.actor_critic.load_state_dict(loaded_dict["model_state_dict"])
+        self.alg.policy.load_state_dict(loaded_dict["model_state_dict"])
         self.alg.discriminator.load_state_dict(loaded_dict["discriminator_state_dict"])
         self.alg.amp_normalizer = loaded_dict["amp_normalizer"]
 
@@ -634,25 +634,25 @@ class AMPOnPolicyRunner:
     def get_inference_policy(self, device=None):
         self.eval_mode()  # switch to evaluation mode (dropout for example)
         if device is not None:
-            self.alg.actor_critic.to(device)
-        policy = self.alg.actor_critic.act_inference
+            self.alg.policy.to(device)
+        policy = self.alg.policy.act_inference
         if self.cfg["empirical_normalization"]:
             if device is not None:
                 self.obs_normalizer.to(device)
-            policy = lambda x: self.alg.actor_critic.act_inference(
+            policy = lambda x: self.alg.policy.act_inference(
                 self.obs_normalizer(x)
             )  # noqa: E731
         return policy
 
     def train_mode(self):
-        self.alg.actor_critic.train()
+        self.alg.policy.train()
         self.alg.discriminator.train()
         if self.empirical_normalization:
             self.obs_normalizer.train()
             self.critic_obs_normalizer.train()
 
     def eval_mode(self):
-        self.alg.actor_critic.eval()
+        self.alg.policy.eval()
         self.alg.discriminator.eval()
         if self.empirical_normalization:
             self.obs_normalizer.eval()

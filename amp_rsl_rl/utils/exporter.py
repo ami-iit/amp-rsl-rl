@@ -12,7 +12,7 @@ from amp_rsl_rl.networks import ActorMoE
 
 
 def export_policy_as_onnx(
-    actor_critic: object,
+    policy: object,
     path: str,
     normalizer: object | None = None,
     filename="policy.onnx",
@@ -21,7 +21,7 @@ def export_policy_as_onnx(
     """Export policy into a Torch ONNX file.
 
     Args:
-        actor_critic: The actor-critic torch module.
+        policy: The policy torch module.
         normalizer: The empirical normalizer module. If None, Identity is used.
         path: The path to the saving directory.
         filename: The name of exported ONNX file. Defaults to "policy.onnx".
@@ -29,7 +29,7 @@ def export_policy_as_onnx(
     """
     if not os.path.exists(path):
         os.makedirs(path, exist_ok=True)
-    policy_exporter = _OnnxPolicyExporter(actor_critic, normalizer, verbose)
+    policy_exporter = _OnnxPolicyExporter(policy, normalizer, verbose)
     policy_exporter.export(path, filename)
 
 
@@ -39,14 +39,14 @@ Helper Classes - Private.
 
 
 class _TorchPolicyExporter(torch.nn.Module):
-    """Exporter of actor-critic into JIT file."""
+    """Exporter of policy into JIT file."""
 
-    def __init__(self, actor_critic, normalizer=None):
+    def __init__(self, policy, normalizer=None):
         super().__init__()
-        self.actor = copy.deepcopy(actor_critic.actor)
-        self.is_recurrent = actor_critic.is_recurrent
+        self.actor = copy.deepcopy(policy.actor)
+        self.is_recurrent = policy.is_recurrent
         if self.is_recurrent:
-            self.rnn = copy.deepcopy(actor_critic.memory_a.rnn)
+            self.rnn = copy.deepcopy(policy.memory_a.rnn)
             self.rnn.cpu()
             self.register_buffer(
                 "hidden_state",
@@ -93,13 +93,13 @@ class _TorchPolicyExporter(torch.nn.Module):
 class _OnnxPolicyExporter(torch.nn.Module):
     """Exporter of actor-critic into ONNX file."""
 
-    def __init__(self, actor_critic, normalizer=None, verbose=False):
+    def __init__(self, policy, normalizer=None, verbose=False):
         super().__init__()
         self.verbose = verbose
-        self.actor = copy.deepcopy(actor_critic.actor)
-        self.is_recurrent = actor_critic.is_recurrent
+        self.actor = copy.deepcopy(policy.actor)
+        self.is_recurrent = policy.is_recurrent
         if self.is_recurrent:
-            self.rnn = copy.deepcopy(actor_critic.memory_a.rnn)
+            self.rnn = copy.deepcopy(policy.memory_a.rnn)
             self.rnn.cpu()
             self.forward = self.forward_lstm
         # copy normalizer if exists

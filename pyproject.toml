@@ -34,7 +34,7 @@ dependencies = [
     "numpy>=1.21.0",
     "scipy>=1.7.0",
     "torch>=1.10.0",
-    "rsl-rl-lib>=2.3.0",
+    "rsl-rl-lib>=3.0.1",
 ]
 dynamic = ["version"]
 
