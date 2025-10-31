@@ -4,13 +4,48 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from pathlib import Path
-from typing import List, Union, Tuple, Generator
+from typing import List, Union, Tuple, Generator, Optional
 from dataclasses import dataclass
 
 import torch
 import numpy as np
 from scipy.spatial.transform import Rotation, Slerp
 from scipy.interpolate import interp1d
+
+
+def _mirror_quaternion(
+    quat_wxyz: torch.Tensor, linear_sign: torch.Tensor
+) -> torch.Tensor:
+    """Mirror orientation quaternions using a diagonal reflection defined by ``linear_sign``."""
+
+    if quat_wxyz.numel() == 0:
+        return quat_wxyz
+
+    device = quat_wxyz.device
+    dtype = quat_wxyz.dtype
+    diag = linear_sign.detach().to(torch.float64).cpu().numpy()
+
+    quat_xyzw = torch.cat((quat_wxyz[..., 1:], quat_wxyz[..., :1]), dim=-1)
+    quat_np = quat_xyzw.detach().to(torch.float64).cpu().numpy()
+    rot = Rotation.from_quat(quat_np)
+
+    mat = rot.as_matrix()
+    left = diag.reshape(1, 3, 1)
+    right = diag.reshape(1, 1, 3)
+    mirrored_mat = mat * left * right
+
+    mirrored_rot = Rotation.from_matrix(mirrored_mat)
+    mirrored_xyzw = torch.tensor(mirrored_rot.as_quat(), dtype=dtype, device=device)
+    # Convert back to wxyz convention
+    return torch.cat((mirrored_xyzw[..., 3:], mirrored_xyzw[..., :3]), dim=-1)
+
+
+from .symmetry import (
+    SymmetrySpec,
+    SymmetryTransform,
+    apply_base_symmetry,
+    apply_joint_symmetry,
+)
 
 
 def download_amp_dataset_from_hf(
@@ -157,6 +192,29 @@ class MotionData:
         indices = torch.randint(0, len(self), (items,), device=self.device)
         return self.get_state_for_reset(indices)
 
+    def mirrored(self, transform: SymmetryTransform) -> "MotionData":
+        """Return a mirrored copy of the motion according to ``transform``."""
+
+        joint_positions = apply_joint_symmetry(self.joint_positions, transform)
+        joint_velocities = apply_joint_symmetry(self.joint_velocities, transform)
+        base_lin_vel_mixed = self.base_lin_velocities_mixed * transform.base_lin_sign
+        base_ang_vel_mixed = self.base_ang_velocities_mixed * transform.base_ang_sign
+
+        base_lin_vel_local, base_ang_vel_local = apply_base_symmetry(
+            self.base_lin_velocities_local, self.base_ang_velocities_local, transform
+        )
+        base_quat = _mirror_quaternion(self.base_quat, transform.base_lin_sign)
+        return MotionData(
+            joint_positions=joint_positions,
+            joint_velocities=joint_velocities,
+            base_lin_velocities_mixed=base_lin_vel_mixed,
+            base_ang_velocities_mixed=base_ang_vel_mixed,
+            base_lin_velocities_local=base_lin_vel_local,
+            base_ang_velocities_local=base_ang_vel_local,
+            base_quat=base_quat,
+            device=self.device,
+        )
+
 
 class AMPLoader:
     """
@@ -185,6 +243,8 @@ class AMPLoader:
         simulation_dt: Timestep used by the simulator
         slow_down_factor: Integer factor to slow down original data
         expected_joint_names: (Optional) override for joint ordering
+        symmetry_spec: (Optional) symmetry description used to mirror motions and
+            augment the dataset on the fly.
     """
 
     def __init__(
@@ -196,6 +256,7 @@ class AMPLoader:
         simulation_dt: float,
         slow_down_factor: int,
         expected_joint_names: Union[List[str], None] = None,
+        symmetry_spec: Optional[SymmetrySpec] = None,
     ) -> None:
         self.device = device
         if isinstance(dataset_path_root, str):
@@ -217,6 +278,12 @@ class AMPLoader:
 
         # Load and process each dataset into MotionData
         self.motion_data: List[MotionData] = []
+        self.symmetry_spec = symmetry_spec
+        self.symmetry_transform: Optional[SymmetryTransform] = None
+        if self.symmetry_spec is not None:
+            self.symmetry_transform = self.symmetry_spec.build_transform(
+                expected_joint_names
+            ).to(self.device)
         for dataset_name in dataset_names:
             dataset_path = dataset_path_root / f"{dataset_name}.npy"
             md = self.load_data(
@@ -226,9 +293,20 @@ class AMPLoader:
                 expected_joint_names,
             )
             self.motion_data.append(md)
+            if self.symmetry_transform is not None:
+                mirrored_md = md.mirrored(self.symmetry_transform)
+                self.motion_data.append(mirrored_md)
 
         # Normalize dataset-level sampling weights
-        weights = torch.tensor(dataset_weights, dtype=torch.float32, device=self.device)
+        augmented_weights: List[float] = []
+        for weight in dataset_weights:
+            augmented_weights.append(weight)
+            if self.symmetry_transform is not None:
+                augmented_weights.append(weight)
+
+        weights = torch.tensor(
+            augmented_weights, dtype=torch.float32, device=self.device
+        )
         self.dataset_weights = weights / weights.sum()
 
         # Precompute flat buffers for fast sampling
