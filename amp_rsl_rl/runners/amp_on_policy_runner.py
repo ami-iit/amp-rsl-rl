@@ -21,8 +21,8 @@ from rsl_rl.modules import (
     ActorCritic,
     ActorCriticRecurrent,
     EmpiricalNormalization,
-    resolve_symmetry_config,
 )
+
 from rsl_rl.utils import store_code_state
 
 from amp_rsl_rl.utils import Normalizer
@@ -138,8 +138,10 @@ class AMPOnPolicyRunner:
         self.device = device
         self.env = env
 
-        # Resolve symmetry configuration to inject environment reference
-        self.alg_cfg = resolve_symmetry_config(self.alg_cfg, self.env)
+        # if using symmetry then pass the environment config object
+        if "symmetry_cfg" in self.alg_cfg and self.alg_cfg["symmetry_cfg"] is not None:
+            # this is used by the symmetry function for handling different observation terms
+            self.alg_cfg["symmetry_cfg"]["_env"] = env
 
         # Get the size of the observation space
         obs, extras = self.env.get_observations()
