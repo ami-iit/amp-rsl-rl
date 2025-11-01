@@ -17,7 +17,12 @@ from torch.utils.tensorboard import SummaryWriter as TensorboardSummaryWriter
 import rsl_rl
 import rsl_rl.utils
 from rsl_rl.env import VecEnv
-from rsl_rl.modules import ActorCritic, ActorCriticRecurrent, EmpiricalNormalization
+from rsl_rl.modules import (
+    ActorCritic,
+    ActorCriticRecurrent,
+    EmpiricalNormalization,
+    resolve_symmetry_config,
+)
 from rsl_rl.utils import store_code_state
 
 from amp_rsl_rl.utils import Normalizer
@@ -133,6 +138,9 @@ class AMPOnPolicyRunner:
         self.device = device
         self.env = env
 
+        # Resolve symmetry configuration to inject environment reference
+        self.alg_cfg = resolve_symmetry_config(self.alg_cfg, self.env)
+
         # Get the size of the observation space
         obs, extras = self.env.get_observations()
         num_obs = obs.shape[1]
@@ -161,6 +169,7 @@ class AMPOnPolicyRunner:
             delta_t,
             self.cfg["slow_down_factor"],
             amp_joint_names,
+            symmetry_cfg=self.alg_cfg.get("symmetry_cfg"),
         )
 
         # self.env.unwrapped.scene["robot"].joint_names)
@@ -173,6 +182,7 @@ class AMPOnPolicyRunner:
             reward_scale=self.discriminator_cfg["reward_scale"],
             device=self.device,
             loss_type=self.discriminator_cfg["loss_type"],
+            symmetry_cfg=self.alg_cfg.get("symmetry_cfg"),
         ).to(self.device)
 
         # Initialize the PPO algorithm
@@ -404,6 +414,7 @@ class AMPOnPolicyRunner:
                 mean_accuracy_policy,
                 mean_accuracy_expert,
                 mean_kl_divergence,
+                mean_symmetry_loss,
             ) = self.alg.update()
             stop = time.time()
             learn_time = stop - start
@@ -479,6 +490,7 @@ class AMPOnPolicyRunner:
         self.writer.add_scalar(
             "Loss/accuracy_expert", locs["mean_accuracy_expert"], locs["it"]
         )
+        self.writer.add_scalar("Loss/symmetry", locs["mean_symmetry_loss"], locs["it"])
 
         self.writer.add_scalar("Loss/learning_rate", self.alg.learning_rate, locs["it"])
         self.writer.add_scalar(
@@ -529,6 +541,7 @@ class AMPOnPolicyRunner:
                             'collection_time']:.3f}s, learning {locs['learn_time']:.3f}s)\n"""
                 f"""{'Value function loss:':>{pad}} {locs['mean_value_loss']:.4f}\n"""
                 f"""{'Surrogate loss:':>{pad}} {locs['mean_surrogate_loss']:.4f}\n"""
+                f"""{'Symmetry loss:':>{pad}} {locs['mean_symmetry_loss']:.4f}\n"""
                 f"""{'Mean action noise std:':>{pad}} {mean_std.item():.2f}\n"""
                 f"""{'Mean reward:':>{pad}} {statistics.mean(locs['rewbuffer']):.2f}\n"""
                 f"""{'Mean episode length:':>{pad}} {statistics.mean(locs['lenbuffer']):.2f}\n"""
@@ -543,6 +556,7 @@ class AMPOnPolicyRunner:
                             'collection_time']:.3f}s, learning {locs['learn_time']:.3f}s)\n"""
                 f"""{'Value function loss:':>{pad}} {locs['mean_value_loss']:.4f}\n"""
                 f"""{'Surrogate loss:':>{pad}} {locs['mean_surrogate_loss']:.4f}\n"""
+                f"""{'Symmetry loss:':>{pad}} {locs['mean_symmetry_loss']:.4f}\n"""
                 f"""{'Mean action noise std:':>{pad}} {mean_std.item():.2f}\n"""
             )
             #   f"""{'Mean reward/step:':>{pad}} {locs['mean_reward']:.2f}\n"""

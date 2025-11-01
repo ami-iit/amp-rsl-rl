@@ -3,6 +3,9 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
+import inspect
+from typing import Any, Dict, Optional
+
 import torch
 import torch.nn as nn
 from torch import autograd
@@ -31,6 +34,7 @@ class Discriminator(nn.Module):
         device: str = "cpu",
         loss_type: str = "BCEWithLogits",
         eta_wgan: float = 0.3,
+        symmetry_cfg: Optional[Dict[str, Any]] = None,
     ):
         super(Discriminator, self).__init__()
 
@@ -38,6 +42,7 @@ class Discriminator(nn.Module):
         self.input_dim = input_dim
         self.reward_scale = reward_scale
         self.reward_clamp_epsilon = reward_clamp_epsilon
+        self.symmetry_cfg = symmetry_cfg
         layers = []
         curr_in_dim = input_dim
 
@@ -62,6 +67,43 @@ class Discriminator(nn.Module):
             raise ValueError(
                 f"Unsupported loss type: {self.loss_type}. Supported types are 'BCEWithLogits' and 'Wasserstein'."
             )
+
+        if self.symmetry_cfg is not None:
+            fn = self.symmetry_cfg.get("data_augmentation_func")
+            if isinstance(fn, str):
+                self.symmetry_cfg["data_augmentation_func"] = utils.string_to_callable(fn)
+
+    def apply_symmetry(self, tensor: torch.Tensor, obs_type: str = "amp") -> torch.Tensor:
+        """Applies the configured symmetry augmentation to the provided tensor."""
+
+        if self.symmetry_cfg is None or not self.symmetry_cfg.get("use_data_augmentation", False):
+            return tensor
+
+        fn = self.symmetry_cfg.get("data_augmentation_func")
+        if fn is None:
+            return tensor
+
+        signature = inspect.signature(fn)
+        kwargs: Dict[str, Any] = {}
+        if "obs" in signature.parameters:
+            kwargs["obs"] = tensor
+        if "actions" in signature.parameters:
+            kwargs["actions"] = None
+        env_ref = self.symmetry_cfg.get("_env")
+        if "env" in signature.parameters:
+            kwargs["env"] = env_ref
+        if "cfg" in signature.parameters and env_ref is not None:
+            kwargs["cfg"] = getattr(env_ref, "cfg", env_ref)
+        if "obs_type" in signature.parameters:
+            kwargs["obs_type"] = obs_type
+
+        result = fn(**kwargs)
+        if isinstance(result, tuple):
+            augmented = result[0]
+        else:
+            augmented = result
+
+        return augmented if augmented is not None else tensor
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass through the discriminator.

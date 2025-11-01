@@ -62,7 +62,25 @@ amp_rsl_rl/
 
 ---
 
-## 📁 Dataset Structure
+## � Symmetry Augmentation
+
+AMP-RSL-RL now exposes the symmetry-aware data augmentation and mirror-loss hooks from
+[RSL-RL](https://github.com/leggedrobotics/rsl_rl). The implementation follows the design
+described in:
+
+> Mittal, M., Rudin, N., Klemm, V., Allshire, A., & Hutter, M. (2024).<br>
+> *Symmetry Considerations for Learning Task Symmetric Robot Policies*. In IEEE International Conference on Robotics and Automation (ICRA).<br>
+> https://doi.org/10.1109/ICRA57147.2024.10611493
+
+Symmetry augmentation can be enabled through the `symmetry_cfg` section of the algorithm
+configuration, providing both minibatch augmentation and optional mirror-loss regularisation
+for the policy update. AMP-specific components (the discriminator and expert/policy motion
+buffers) are augmented using the same configuration so that style rewards and adversarial
+training remain consistent with their symmetric counterparts.
+
+---
+
+## �📁 Dataset Structure
 
 The AMP-RSL-RL framework expects motion capture datasets in `.npy` format. Each `.npy` file must contain a Python dictionary with the following keys:
 
