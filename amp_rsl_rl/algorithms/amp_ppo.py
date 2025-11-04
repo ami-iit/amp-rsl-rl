@@ -454,6 +454,10 @@ class AMP_PPO:
             policy_state, policy_next_state = sample_amp_policy
             expert_state, expert_next_state = sample_amp_expert
 
+            # Store raw (unnormalized) AMP observations for normalizer update later.
+            raw_policy_state = policy_state.clone()
+            raw_expert_state = expert_state.clone()
+
             # Normalize AMP observations if a normalizer is provided.
             if self.amp_normalizer is not None:
                 with torch.no_grad():
@@ -491,10 +495,10 @@ class AMP_PPO:
             nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.max_grad_norm)
             self.optimizer.step()
 
-            # Update the normalizer with current policy and expert AMP observations.
+            # Update the normalizer with the raw AMP observations.
             if self.amp_normalizer is not None:
-                self.amp_normalizer.update(policy_state)
-                self.amp_normalizer.update(expert_state)
+                self.amp_normalizer.update(raw_policy_state)
+                self.amp_normalizer.update(raw_expert_state)
 
             # Compute probabilities from the discriminator logits.
             policy_d_prob = torch.sigmoid(policy_d)
