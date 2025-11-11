@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 from torch import autograd
 from rsl_rl.utils import utils
+from torch.nn import functional as F
 
 
 class Discriminator(nn.Module):
@@ -31,6 +32,7 @@ class Discriminator(nn.Module):
         device: str = "cpu",
         loss_type: str = "BCEWithLogits",
         eta_wgan: float = 0.3,
+        use_minibatch_std: bool = True,
     ):
         super(Discriminator, self).__init__()
 
@@ -47,10 +49,12 @@ class Discriminator(nn.Module):
             curr_in_dim = hidden_dim
 
         self.trunk = nn.Sequential(*layers).to(device)
-        self.linear = nn.Linear(hidden_layer_sizes[-1], 1).to(device)
+        final_in_dim = hidden_layer_sizes[-1] + (1 if use_minibatch_std else 0)
+        self.linear = nn.Linear(final_in_dim, 1).to(device)
 
         self.trunk.train()
         self.linear.train()
+        self.use_minibatch_std = use_minibatch_std
         self.loss_type = loss_type if loss_type is not None else "BCEWithLogits"
         if self.loss_type == "BCEWithLogits":
             self.loss_fun = torch.nn.BCEWithLogitsLoss()
@@ -70,11 +74,20 @@ class Discriminator(nn.Module):
             x (Tensor): Input tensor (batch_size, input_dim).
 
         Returns:
-            Tensor: Discriminator output logits.
+            Tensor: Discriminator output logits/scores.
         """
         h = self.trunk(x)
-        d = self.linear(h)
-        return d
+        if self.use_minibatch_std:
+            s = self._minibatch_std_scalar(h)
+            h = torch.cat([h, s], dim=-1)
+        return self.linear(h)
+
+    def _minibatch_std_scalar(self, h: torch.Tensor) -> torch.Tensor:
+        """Mean over feature-wise std across the batch; shape (B,1)."""
+        if h.shape[0] <= 1:
+            return h.new_zeros((h.shape[0], 1))
+        s = h.float().std(dim=0, unbiased=False).mean()
+        return s.expand(h.shape[0], 1).to(h.dtype)
 
     def predict_reward(
         self,
@@ -102,16 +115,8 @@ class Discriminator(nn.Module):
             if self.loss_type == "Wasserstein":
                 discriminator_logit = torch.tanh(self.eta_wgan * discriminator_logit)
                 return self.reward_scale * torch.exp(discriminator_logit).squeeze()
-
-            prob = torch.sigmoid(discriminator_logit)
-            # Avoid log(0) by clamping the input to a minimum threshold
-            reward = -torch.log(
-                torch.maximum(
-                    1 - prob,
-                    torch.tensor(self.reward_clamp_epsilon, device=self.device),
-                )
-            )
-
+            # softplus(logit) == -log(1 - sigmoid(logit))
+            reward = F.softplus(discriminator_logit)
             reward = self.reward_scale * reward
             return reward.squeeze()
 
@@ -196,27 +201,49 @@ class Discriminator(nn.Module):
         if self.loss_type == "Wasserstein":
             policy = torch.cat(policy_states, -1)
             alpha = torch.rand(expert.size(0), 1, device=expert.device)
+            alpha = alpha.expand_as(expert)
             data = alpha * expert + (1 - alpha) * policy
-            offset = 1
+            data = data.detach().requires_grad_(True)
+            h = self.trunk(data)
+            if self.use_minibatch_std:
+                with torch.no_grad():
+                    s = self._minibatch_std_scalar(h)
+                h = torch.cat([h, s], dim=-1)
+            scores = self.linear(h)
+            grad = autograd.grad(
+                outputs=scores,
+                inputs=data,
+                grad_outputs=torch.ones_like(scores),
+                create_graph=True,
+                retain_graph=True,
+                only_inputs=True,
+            )[0]
+            return lambda_ * (grad.norm(2, dim=1) - 1.0).pow(2).mean()
         elif self.loss_type == "BCEWithLogits":
-            data = expert
-            offset = 0
+            # R1 regularizer on REAL: 0.5 * lambda * ||∇_x D(x_real)||^2
+            data = expert.detach().requires_grad_(True)
+            # Compute D(x_real) with minibatch-std DETACHED,
+            # so gradients are w.r.t. the sample itself, not the batch statistics.
+            h = self.trunk(data)
+            if self.use_minibatch_std:
+                with torch.no_grad():
+                    s = self._minibatch_std_scalar(h)
+                h = torch.cat([h, s], dim=-1)
+            scores = self.linear(h)
+
+            grad = autograd.grad(
+                outputs=scores.sum(),
+                inputs=data,
+                create_graph=True,
+                retain_graph=True,
+                only_inputs=True,
+            )[0]
+            return 0.5 * lambda_ * (grad.pow(2).sum(dim=1)).mean()
+
         else:
             raise ValueError(
                 f"Unsupported loss type: {self.loss_type}. Supported types are 'BCEWithLogits' and 'Wasserstein'."
             )
-
-        data.requires_grad = True
-        scores = self.forward(data)
-        grad = autograd.grad(
-            outputs=scores,
-            inputs=data,
-            grad_outputs=torch.ones_like(scores),
-            create_graph=True,
-            retain_graph=True,
-            only_inputs=True,
-        )[0]
-        return lambda_ * (grad.norm(2, dim=1) - offset).pow(2).mean()
 
     def wgan_loss(self, policy_d, expert_d):
         """
