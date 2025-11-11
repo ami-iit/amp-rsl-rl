@@ -21,6 +21,9 @@ class Discriminator(nn.Module):
         hidden_layer_sizes (list): List of hidden layer sizes.
         reward_scale (float): Scale factor for the computed reward.
         device (str): Device to run the model on ('cpu' or 'cuda').
+        loss_type (str): Type of loss function to use ('BCEWithLogits' or 'Wasserstein').
+        eta_wgan (float): Scaling factor for the Wasserstein loss (if used).
+        use_minibatch_std (bool): Whether to use minibatch standard deviation in the network
     """
 
     def __init__(
