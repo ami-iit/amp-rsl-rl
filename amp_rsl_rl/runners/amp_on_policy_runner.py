@@ -165,7 +165,7 @@ class AMPOnPolicyRunner:
 
         self.amp_normalizer = (
             None
-            if self.discriminator_cfg["empirical_normalization"] is False
+            if not self.discriminator_cfg["empirical_normalization"]
             else EmpiricalNormalization(shape=[num_amp_obs], until=1.0e8).to(
                 self.device
             )
