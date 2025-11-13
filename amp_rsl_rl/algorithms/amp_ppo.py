@@ -299,7 +299,9 @@ class AMP_PPO:
         last_values = self.actor_critic.evaluate(last_critic_obs).detach()
         self.storage.compute_returns(last_values, self.gamma, self.lam)
 
-    def update(self) -> Tuple[float, float, float, float, float, float, float, float]:
+    def update(
+        self,
+    ) -> Tuple[float, float, float, float, float, float, float, float, float]:
         """
         Performs a single update step for both the actor-critic (PPO) and the AMP discriminator.
         It iterates over mini-batches of data, computes surrogate, value, AMP and gradient penalty losses,
@@ -310,7 +312,8 @@ class AMP_PPO:
         tuple
             A tuple containing mean losses and statistics:
             (mean_value_loss, mean_surrogate_loss, mean_amp_loss, mean_grad_pen_loss,
-             mean_policy_pred, mean_expert_pred, mean_accuracy_policy, mean_accuracy_expert)
+             mean_policy_pred, mean_expert_pred, mean_accuracy_policy, mean_accuracy_expert,
+             mean_kl_divergence)
         """
         # Initialize mean loss and accuracy statistics.
         mean_value_loss: float = 0.0
@@ -454,17 +457,25 @@ class AMP_PPO:
             policy_state, policy_next_state = sample_amp_policy
             expert_state, expert_next_state = sample_amp_expert
 
-            # Store raw (unnormalized) AMP observations for normalizer update later.
-            raw_policy_state = policy_state.clone()
-            raw_expert_state = expert_state.clone()
+            # Ensure everything is on the right device (AMPLoader may yield CPU tensors)
+            policy_state = policy_state.to(self.device)
+            policy_next_state = policy_next_state.to(self.device)
+            expert_state = expert_state.to(self.device)
+            expert_next_state = expert_next_state.to(self.device)
+
+            # Keep raw tensors for normalizer updates
+            policy_state_raw = policy_state
+            policy_next_state_raw = policy_next_state
+            expert_state_raw = expert_state
+            expert_next_state_raw = expert_next_state
 
             # Normalize AMP observations if a normalizer is provided.
             if self.amp_normalizer is not None:
                 with torch.no_grad():
-                    policy_state = self.amp_normalizer.normalize(policy_state)
-                    policy_next_state = self.amp_normalizer.normalize(policy_next_state)
-                    expert_state = self.amp_normalizer.normalize(expert_state)
-                    expert_next_state = self.amp_normalizer.normalize(expert_next_state)
+                    policy_state = self.amp_normalizer(policy_state_raw)
+                    policy_next_state = self.amp_normalizer(policy_next_state_raw)
+                    expert_state = self.amp_normalizer(expert_state_raw)
+                    expert_next_state = self.amp_normalizer(expert_next_state_raw)
 
             # Concatenate policy and expert AMP observations for the discriminator input.
             B_pol = policy_state.size(0)
@@ -495,10 +506,19 @@ class AMP_PPO:
             nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.max_grad_norm)
             self.optimizer.step()
 
-            # Update the normalizer with the raw AMP observations.
+            # Update the normalizer with RAW (unnormalized) observations under no_grad
             if self.amp_normalizer is not None:
-                self.amp_normalizer.update(raw_policy_state)
-                self.amp_normalizer.update(raw_expert_state)
+                with torch.no_grad():
+                    minibatch = torch.cat(
+                        [
+                            expert_state_raw,
+                            expert_next_state_raw,
+                            policy_state_raw,
+                            policy_next_state_raw,
+                        ],
+                        dim=0,
+                    )
+                    self.amp_normalizer.update(minibatch)
 
             # Compute probabilities from the discriminator logits.
             policy_d_prob = torch.sigmoid(policy_d)

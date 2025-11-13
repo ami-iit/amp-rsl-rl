@@ -110,8 +110,8 @@ class Discriminator(nn.Module):
         """
         with torch.no_grad():
             if normalizer is not None:
-                state = normalizer.normalize(state)
-                next_state = normalizer.normalize(next_state)
+                state = normalizer(state)
+                next_state = normalizer(next_state)
 
             discriminator_logit = self.forward(torch.cat([state, next_state], dim=-1))
 

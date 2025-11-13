@@ -163,10 +163,13 @@ class AMPOnPolicyRunner:
             amp_joint_names,
         )
 
-        # self.env.unwrapped.scene["robot"].joint_names)
-
-        # amp_data = AMPLoader(num_amp_obs, self.device)
-        self.amp_normalizer = Normalizer(num_amp_obs, device=self.device)
+        self.amp_normalizer = (
+            None
+            if self.discriminator_cfg["empirical_normalization"] is False
+            else EmpiricalNormalization(shape=[num_amp_obs], until=1.0e8).to(
+                self.device
+            )
+        )
         self.discriminator = Discriminator(
             input_dim=num_amp_obs* 2,  # the discriminator takes in the concatenation of the current and next observation
             hidden_layer_sizes=self.discriminator_cfg["hidden_dims"],
