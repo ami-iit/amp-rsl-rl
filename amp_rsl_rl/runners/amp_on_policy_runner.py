@@ -160,8 +160,7 @@ class AMPOnPolicyRunner:
         amp_data = AMPLoader(
             self.device,
             self.cfg["amp_data_path"],
-            self.cfg["dataset_names"],
-            self.cfg["dataset_weights"],
+            self.cfg["datasets"],
             delta_t,
             self.cfg["slow_down_factor"],
             amp_joint_names,

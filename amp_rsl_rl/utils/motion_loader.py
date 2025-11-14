@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from pathlib import Path
-from typing import List, Union, Tuple, Generator
+from typing import Dict, List, Union, Tuple, Generator
 from dataclasses import dataclass
 
 import torch
@@ -180,8 +180,7 @@ class AMPLoader:
     Args:
         device: Target torch device ('cpu' or 'cuda')
         dataset_path_root: Directory containing the .npy motion files
-        dataset_names: List of dataset filenames (no extension)
-        dataset_weights: List of sampling weights (for minibatch sampling)
+        datasets: Dict[str, float], mapping of dataset filenames (no extension) to sampling weights
         simulation_dt: Timestep used by the simulator
         slow_down_factor: Integer factor to slow down original data
         expected_joint_names: (Optional) override for joint ordering
@@ -191,8 +190,7 @@ class AMPLoader:
         self,
         device: str,
         dataset_path_root: Path,
-        dataset_names: List[str],
-        dataset_weights: List[float],
+        datasets: Dict[str, float],
         simulation_dt: float,
         slow_down_factor: int,
         expected_joint_names: Union[List[str], None] = None,
@@ -205,7 +203,7 @@ class AMPLoader:
         if expected_joint_names is None:
             joint_union: List[str] = []
             seen = set()
-            for name in dataset_names:
+            for name in datasets.keys():
                 p = dataset_path_root / f"{name}.npy"
                 info = np.load(str(p), allow_pickle=True).item()
                 for j in info["joints_list"]:
@@ -217,7 +215,7 @@ class AMPLoader:
 
         # Load and process each dataset into MotionData
         self.motion_data: List[MotionData] = []
-        for dataset_name in dataset_names:
+        for dataset_name in datasets.keys():
             dataset_path = dataset_path_root / f"{dataset_name}.npy"
             md = self.load_data(
                 dataset_path,
@@ -228,7 +226,7 @@ class AMPLoader:
             self.motion_data.append(md)
 
         # Normalize dataset-level sampling weights
-        weights = torch.tensor(dataset_weights, dtype=torch.float32, device=self.device)
+        weights = torch.tensor(list(datasets.values()), dtype=torch.float32, device=self.device)
         self.dataset_weights = weights / weights.sum()
 
         # Precompute flat buffers for fast sampling
@@ -319,6 +317,11 @@ class AMPLoader:
         Returns:
             MotionData instance
         """
+
+        # check if the dataset file exists
+        if not dataset_path.exists():
+            raise FileNotFoundError(f"Dataset file not found: {dataset_path}")
+
         data = np.load(str(dataset_path), allow_pickle=True).item()
         dataset_joint_names = data["joints_list"]
 
