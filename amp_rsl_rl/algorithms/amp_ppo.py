@@ -18,7 +18,7 @@ from rsl_rl.storage import RolloutStorage
 
 from amp_rsl_rl.storage import ReplayBuffer
 from amp_rsl_rl.networks import Discriminator
-from amp_rsl_rl.utils import AMPLoader
+from amp_rsl_rl.utils import AMPLoader, SymmetryTransform, mirror_amp_transition
 
 
 class AMP_PPO:
@@ -69,6 +69,10 @@ class AMP_PPO:
         Maximum number of policy transitions stored in the replay buffer for AMP training.
     device : str, default="cpu"
         The device (CPU or GPU) on which the models will be computed.
+    symmetry_transform : Optional[SymmetryTransform]
+        Optional symmetry description used to mirror policy AMP observations for
+        data augmentation. When provided, every policy transition is mirrored and
+        stored alongside the original one.
     """
 
     actor_critic: ActorCritic
@@ -94,6 +98,7 @@ class AMP_PPO:
         amp_replay_buffer_size: int = 100000,
         use_smooth_ratio_clipping: bool = False,
         device: str = "cpu",
+        symmetry_transform: Optional[SymmetryTransform] = None,
     ) -> None:
         # Set device and learning hyperparameters
         self.device: str = device
@@ -112,6 +117,9 @@ class AMP_PPO:
         )
         self.amp_data: AMPLoader = amp_data
         self.amp_normalizer: Optional[Any] = amp_normalizer
+        self.symmetry_transform: Optional[SymmetryTransform] = (
+            symmetry_transform.to(device) if symmetry_transform is not None else None
+        )
 
         # Set up the actor-critic (policy) and move it to the device.
         self.actor_critic = actor_critic
@@ -285,6 +293,13 @@ class AMP_PPO:
             The new AMP observation (from expert data or policy update).
         """
         self.amp_storage.insert(self.amp_transition.observations, amp_obs)
+        if self.symmetry_transform is not None:
+            mirrored_state, mirrored_next = mirror_amp_transition(
+                self.amp_transition.observations,
+                amp_obs,
+                self.symmetry_transform,
+            )
+            self.amp_storage.insert(mirrored_state, mirrored_next)
         self.amp_transition.clear()
 
     def compute_returns(self, last_critic_obs: torch.Tensor) -> None:

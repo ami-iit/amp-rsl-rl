@@ -21,7 +21,7 @@ from rsl_rl.modules import ActorCritic, ActorCriticRecurrent, EmpiricalNormaliza
 from rsl_rl.utils import store_code_state
 
 from amp_rsl_rl.utils import Normalizer
-from amp_rsl_rl.utils import AMPLoader
+from amp_rsl_rl.utils import AMPLoader, SymmetrySpec
 from amp_rsl_rl.algorithms import AMP_PPO
 from amp_rsl_rl.networks import Discriminator, ActorCriticMoE
 from amp_rsl_rl.utils import export_policy_as_onnx
@@ -147,7 +147,26 @@ class AMPOnPolicyRunner:
             ).to(self.device)
         )
         # NOTE: to use this we need to configure the observations in the env coherently with amp observation. Tested with Manager Based envs in Isaaclab
-        amp_joint_names = self.env.cfg.observations.amp.joint_pos.params['asset_cfg'].joint_names
+        amp_joint_names = self.env.cfg.observations.amp.joint_pos.params[
+            "asset_cfg"
+        ].joint_names
+
+        symmetry_cfg = self.cfg.get("symmetry_cfg")
+        symmetry_spec = None
+        if symmetry_cfg:
+            joint_pairs = [tuple(pair) for pair in symmetry_cfg.get("joint_pairs", [])]
+            symmetry_spec = SymmetrySpec(
+                joint_pairs=joint_pairs,
+                center_joints=tuple(symmetry_cfg.get("center_joints", ())),
+                joint_sign_overrides=symmetry_cfg.get("joint_sign_overrides", {}),
+                base_linear_sign=tuple(
+                    symmetry_cfg.get("base_linear_sign", (1.0, -1.0, 1.0))
+                ),
+                base_angular_sign=tuple(
+                    symmetry_cfg.get("base_angular_sign", (1.0, -1.0, -1.0))
+                ),
+                allow_unmapped=symmetry_cfg.get("allow_unmapped", True),
+            )
 
         delta_t = self.env.cfg.sim.dt * self.env.cfg.decimation
 
@@ -161,6 +180,7 @@ class AMPOnPolicyRunner:
             delta_t,
             self.cfg["slow_down_factor"],
             amp_joint_names,
+            symmetry_spec=symmetry_spec,
         )
 
         self.amp_normalizer = (
@@ -171,7 +191,8 @@ class AMPOnPolicyRunner:
             )
         )
         self.discriminator = Discriminator(
-            input_dim=num_amp_obs* 2,  # the discriminator takes in the concatenation of the current and next observation
+            input_dim=num_amp_obs
+            * 2,  # the discriminator takes in the concatenation of the current and next observation
             hidden_layer_sizes=self.discriminator_cfg["hidden_dims"],
             reward_scale=self.discriminator_cfg["reward_scale"],
             device=self.device,
@@ -195,6 +216,7 @@ class AMPOnPolicyRunner:
             amp_data=amp_data,
             amp_normalizer=self.amp_normalizer,
             device=self.device,
+            symmetry_transform=amp_data.symmetry_transform,
             **self.alg_cfg,
         )
         self.num_steps_per_env = self.cfg["num_steps_per_env"]

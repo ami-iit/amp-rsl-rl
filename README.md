@@ -105,6 +105,38 @@ For a ready-to-use motion capture dataset, you can use the [AMP Dataset on Huggi
 
 ---
 
+## ♻️ Symmetry Augmentation
+
+You can mirror demonstrations and policy rollouts by declaring the robot's kinematic symmetry in the training configuration. Provide a `symmetry_cfg` dictionary when building the runner:
+
+```python
+symmetry_cfg = {
+  "joint_pairs": [
+    ["left_hip_yaw", "right_hip_yaw"],
+    ["left_knee", "right_knee"],
+    # ... add all mirrored joint names here
+  ],
+  "center_joints": ["torso_yaw"],
+  "joint_sign_overrides": {
+    "left_hip_roll": -1.0,
+    "right_hip_roll": -1.0,
+  },
+  "base_linear_sign": [1.0, -1.0, 1.0],
+  "base_angular_sign": [1.0, -1.0, -1.0],
+}
+```
+
+Key fields:
+
+- **`joint_pairs`** – mirrored joint name tuples (left, right).
+- **`center_joints`** – joints lying on the mirror plane (remain unchanged).
+- **`joint_sign_overrides`** – optional per-joint multipliers (±1) for axes that reverse direction (e.g., roll joints).
+- **`base_linear_sign` / `base_angular_sign`** – sign flips for base velocities when reflected across the sagittal plane.
+
+When supplied, the dataset loader automatically augments motion clips with mirrored copies. The PPO agent mirrors policy-generated AMP observations as well, so the discriminator receives both original and reflected trajectories without extra code.
+
+---
+
 ## 🧑‍💻 Authors
 
 - **Giulio Romualdi** – [@GiulioRomualdi](https://github.com/GiulioRomualdi)
