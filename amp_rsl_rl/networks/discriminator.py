@@ -3,10 +3,11 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
+from typing import Callable
+
 import torch
 import torch.nn as nn
 from torch import autograd
-from rsl_rl.utils import utils
 from torch.nn import functional as F
 
 
@@ -20,7 +21,8 @@ class Discriminator(nn.Module):
         input_dim (int): Dimension of the concatenated input state (state + next state).
         hidden_layer_sizes (list): List of hidden layer sizes.
         reward_scale (float): Scale factor for the computed reward.
-        device (str): Device to run the model on ('cpu' or 'cuda').
+        reward_clamp_epsilon (float): Numerical epsilon used when clamping rewards.
+        device (str | torch.device): Device to run the model on.
         loss_type (str): Type of loss function to use ('BCEWithLogits' or 'Wasserstein').
         eta_wgan (float): Scaling factor for the Wasserstein loss (if used).
         use_minibatch_std (bool): Whether to use minibatch standard deviation in the network
@@ -31,15 +33,15 @@ class Discriminator(nn.Module):
         input_dim: int,
         hidden_layer_sizes: list[int],
         reward_scale: float,
-        reward_clamp_epsilon: float = 0.0001,
-        device: str = "cpu",
+        reward_clamp_epsilon: float = 1.0e-4,
+        device: str | torch.device = "cpu",
         loss_type: str = "BCEWithLogits",
         eta_wgan: float = 0.3,
         use_minibatch_std: bool = True,
     ):
-        super(Discriminator, self).__init__()
+        super().__init__()
 
-        self.device = device
+        self.device = torch.device(device)
         self.input_dim = input_dim
         self.reward_scale = reward_scale
         self.reward_clamp_epsilon = reward_clamp_epsilon
@@ -51,12 +53,12 @@ class Discriminator(nn.Module):
             layers.append(nn.ReLU())
             curr_in_dim = hidden_dim
 
-        self.trunk = nn.Sequential(*layers).to(device)
+        self.trunk = nn.Sequential(*layers)
         final_in_dim = hidden_layer_sizes[-1] + (1 if use_minibatch_std else 0)
-        self.linear = nn.Linear(final_in_dim, 1).to(device)
+        self.linear = nn.Linear(final_in_dim, 1)
 
-        self.trunk.train()
-        self.linear.train()
+        self.to(self.device)
+        self.train()
         self.use_minibatch_std = use_minibatch_std
         self.loss_type = loss_type if loss_type is not None else "BCEWithLogits"
         if self.loss_type == "BCEWithLogits":
@@ -96,14 +98,14 @@ class Discriminator(nn.Module):
         self,
         state: torch.Tensor,
         next_state: torch.Tensor,
-        normalizer=None,
+        normalizer: Callable[[torch.Tensor], torch.Tensor] | None = None,
     ) -> torch.Tensor:
         """Predicts reward based on discriminator output using a log-style formulation.
 
         Args:
             state (Tensor): Current state tensor.
             next_state (Tensor): Next state tensor.
-            normalizer (Optional): Optional state normalizer.
+            normalizer (Callable | None): Optional callable applied to states prior to scoring.
 
         Returns:
             Tensor: Computed adversarial reward.

@@ -3,6 +3,7 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 from torch.distributions import Normal
+from rsl_rl.networks import EmpiricalNormalization
 from rsl_rl.utils import resolve_nn_activation
 
 
@@ -67,14 +68,20 @@ class ActorMoE(nn.Module):
 
 
 class ActorCriticMoE(nn.Module):
-    """Actor-critic with Mixture-of-Experts policy."""
+    """Actor-critic module powered by a Mixture-of-Experts policy network.
+
+    The API mirrors :class:`rsl_rl.modules.ActorCritic` so the class can be
+    referenced via the standard policy ``class_name`` in configuration files.
+    Observations are provided as TensorDict (or dict-like) containers and are
+    grouped via ``obs_groups`` exactly like the upstream implementation.
+    """
 
     is_recurrent = False
 
     def __init__(
         self,
-        num_actor_obs: int,
-        num_critic_obs: int,
+        obs,
+        obs_groups,
         num_actions: int,
         actor_hidden_dims=[256, 256, 256],
         critic_hidden_dims=[256, 256, 256],
@@ -82,6 +89,8 @@ class ActorCriticMoE(nn.Module):
         activation: str = "elu",
         init_noise_std: float = 1.0,
         noise_std_type: str = "scalar",
+        actor_obs_normalization: bool = False,
+        critic_obs_normalization: bool = False,
         **kwargs,
     ):
         if kwargs:
@@ -92,20 +101,46 @@ class ActorCriticMoE(nn.Module):
                 )
             )
         super().__init__()
+
+        self.obs_groups = obs_groups
+
+        num_actor_obs = 0
+        for obs_group in obs_groups["policy"]:
+            assert (
+                len(obs[obs_group].shape) == 2
+            ), "ActorCriticMoE only supports 1D flattened observations."
+            num_actor_obs += obs[obs_group].shape[-1]
+
+        num_critic_obs = 0
+        for obs_group in obs_groups["critic"]:
+            assert (
+                len(obs[obs_group].shape) == 2
+            ), "ActorCriticMoE only supports 1D flattened observations."
+            num_critic_obs += obs[obs_group].shape[-1]
+
         act = resolve_nn_activation(activation)
 
-        # Actor (Mixture-of-Experts)
         self.actor = ActorMoE(
             obs_dim=num_actor_obs,
             act_dim=num_actions,
             hidden_dims=actor_hidden_dims,
             num_experts=num_experts,
-            gate_hidden_dims=actor_hidden_dims[:-1],  # last layer is output
+            gate_hidden_dims=actor_hidden_dims[:-1],
             activation=activation,
         )
-
-        # Critic
         self.critic = MLP_net(num_critic_obs, critic_hidden_dims, 1, act)
+
+        self.actor_obs_normalization = actor_obs_normalization
+        if actor_obs_normalization:
+            self.actor_obs_normalizer = EmpiricalNormalization(num_actor_obs)
+        else:
+            self.actor_obs_normalizer = nn.Identity()
+
+        self.critic_obs_normalization = critic_obs_normalization
+        if critic_obs_normalization:
+            self.critic_obs_normalizer = EmpiricalNormalization(num_critic_obs)
+        else:
+            self.critic_obs_normalizer = nn.Identity()
 
         self.noise_std_type = noise_std_type
         if self.noise_std_type == "scalar":
@@ -117,7 +152,6 @@ class ActorCriticMoE(nn.Module):
         else:
             raise ValueError("noise_std_type must be 'scalar' or 'log'")
 
-        # Action distribution (populated in update_distribution)
         self.distribution = None
         Normal.set_default_validate_args(False)
 
@@ -150,19 +184,40 @@ class ActorCriticMoE(nn.Module):
             std = torch.exp(self.log_std).expand_as(mean)
         self.distribution = Normal(mean, std)
 
-    def act(self, observations, **kwargs):
-        self.update_distribution(observations)
+    def act(self, obs, **kwargs):
+        actor_obs = self.get_actor_obs(obs)
+        actor_obs = self.actor_obs_normalizer(actor_obs)
+        self.update_distribution(actor_obs)
         return self.distribution.sample()
 
     def get_actions_log_prob(self, actions):
         return self.distribution.log_prob(actions).sum(dim=-1)
 
-    def act_inference(self, observations):
-        # deterministic (mean) action
-        return self.actor(observations)
+    def act_inference(self, obs):
+        actor_obs = self.get_actor_obs(obs)
+        actor_obs = self.actor_obs_normalizer(actor_obs)
+        return self.actor(actor_obs)
 
-    def evaluate(self, critic_observations, **kwargs):
-        return self.critic(critic_observations)
+    def evaluate(self, obs, **kwargs):
+        critic_obs = self.get_critic_obs(obs)
+        critic_obs = self.critic_obs_normalizer(critic_obs)
+        return self.critic(critic_obs)
+
+    def get_actor_obs(self, obs):
+        obs_list = [obs[obs_group] for obs_group in self.obs_groups["policy"]]
+        return torch.cat(obs_list, dim=-1)
+
+    def get_critic_obs(self, obs):
+        obs_list = [obs[obs_group] for obs_group in self.obs_groups["critic"]]
+        return torch.cat(obs_list, dim=-1)
+
+    def update_normalization(self, obs):
+        if self.actor_obs_normalization:
+            actor_obs = self.get_actor_obs(obs)
+            self.actor_obs_normalizer.update(actor_obs)
+        if self.critic_obs_normalization:
+            critic_obs = self.get_critic_obs(obs)
+            self.critic_obs_normalizer.update(critic_obs)
 
     # unchanged load_state_dict so checkpoints from the old class still load
     def load_state_dict(self, state_dict, strict=True):

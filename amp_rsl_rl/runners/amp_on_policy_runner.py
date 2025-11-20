@@ -9,18 +9,17 @@ from __future__ import annotations
 import os
 import statistics
 import time
+import warnings
 from collections import deque
 
 import torch
 from torch.utils.tensorboard import SummaryWriter as TensorboardSummaryWriter
 
 import rsl_rl
-import rsl_rl.utils
 from rsl_rl.env import VecEnv
 from rsl_rl.modules import ActorCritic, ActorCriticRecurrent, EmpiricalNormalization
-from rsl_rl.utils import store_code_state
+from rsl_rl.utils import resolve_obs_groups, store_code_state
 
-from amp_rsl_rl.utils import Normalizer
 from amp_rsl_rl.utils import AMPLoader
 from amp_rsl_rl.algorithms import AMP_PPO
 from amp_rsl_rl.networks import Discriminator, ActorCriticMoE
@@ -44,6 +43,7 @@ class AMPOnPolicyRunner:
     🔧 Configuration
     ----------------
     The class expects a `train_cfg` dictionary structured with keys:
+    - "obs_groups": optional mapping describing which observation tensors belong to "policy" and "critic" inputs.
     - "policy": configuration for the policy network, including `"class_name"`
     - "algorithm": configuration for PPO/AMP_PPO, including `"class_name"`
     - "discriminator": configuration for the AMP discriminator
@@ -53,7 +53,7 @@ class AMPOnPolicyRunner:
     - "slow_down_factor": slowdown applied to real motion data to match sim dynamics
     - "num_steps_per_env": rollout horizon per environment
     - "save_interval": frequency (in iterations) for model checkpointing
-    - "empirical_normalization": whether to apply running observation normalization
+    - "empirical_normalization": (deprecated) legacy flag mirrored to `policy.actor_obs_normalization`
     - "logger": one of "tensorboard", "wandb", or "neptune"
 
     ---
@@ -87,10 +87,10 @@ class AMPOnPolicyRunner:
     🔁 Training loop
     ----------------
     The `learn()` method performs:
-    - `rollout`: collects data via `self.alg.act()` and `env.step()`
+    - `rollout`: collects TensorDict observations via `self.alg.act()` and `env.step()`
     - `style_reward`: computed from discriminator via `predict_reward(...)`
     - `storage update`: via `process_env_step()` and `process_amp_step()`
-    - `return computation`: via `compute_returns()`
+    - `return computation`: via `compute_returns()` using the latest observation TensorDict
     - `update`: performs backpropagation with `self.alg.update()`
     - Logging via TensorBoard/WandB/Neptune
 
@@ -133,26 +133,46 @@ class AMPOnPolicyRunner:
         self.device = device
         self.env = env
 
-        # Get the size of the observation space
-        obs, extras = self.env.get_observations()
-        num_obs = obs.shape[1]
-        if "critic" in extras["observations"]:
-            num_critic_obs = extras["observations"]["critic"].shape[1]
-        else:
-            num_critic_obs = num_obs
+        observations = self.env.get_observations()
+        default_sets = ["critic"]
+        self.cfg["obs_groups"] = resolve_obs_groups(
+            observations, self.cfg.get("obs_groups"), default_sets
+        )
+
+        if self.cfg.get("empirical_normalization") is not None:
+            warnings.warn(
+                "`empirical_normalization` on the runner is deprecated. "
+                "Set `actor_obs_normalization` and `critic_obs_normalization` "
+                "inside the policy configuration instead.",
+                DeprecationWarning,
+            )
+            if self.policy_cfg.get("actor_obs_normalization") is None:
+                self.policy_cfg["actor_obs_normalization"] = self.cfg[
+                    "empirical_normalization"
+                ]
+            if self.policy_cfg.get("critic_obs_normalization") is None:
+                self.policy_cfg["critic_obs_normalization"] = self.cfg[
+                    "empirical_normalization"
+                ]
+
         actor_critic_class = eval(self.policy_cfg.pop("class_name"))  # ActorCritic
         actor_critic: ActorCritic | ActorCriticRecurrent | ActorCriticMoE = (
             actor_critic_class(
-                num_obs, num_critic_obs, self.env.num_actions, **self.policy_cfg
+                observations,
+                self.cfg["obs_groups"],
+                self.env.num_actions,
+                **self.policy_cfg,
             ).to(self.device)
         )
         # NOTE: to use this we need to configure the observations in the env coherently with amp observation. Tested with Manager Based envs in Isaaclab
-        amp_joint_names = self.env.cfg.observations.amp.joint_pos.params['asset_cfg'].joint_names
+        amp_joint_names = self.env.cfg.observations.amp.joint_pos.params[
+            "asset_cfg"
+        ].joint_names
 
         delta_t = self.env.cfg.sim.dt * self.env.cfg.decimation
 
         # Initilize all the ingredients required for AMP (discriminator, dataset loader)
-        num_amp_obs = extras["observations"]["amp"].shape[1]
+        num_amp_obs = observations["amp"].shape[1]
         amp_data = AMPLoader(
             self.device,
             self.cfg["amp_data_path"],
@@ -171,7 +191,8 @@ class AMPOnPolicyRunner:
             )
         )
         self.discriminator = Discriminator(
-            input_dim=num_amp_obs* 2,  # the discriminator takes in the concatenation of the current and next observation
+            input_dim=num_amp_obs
+            * 2,  # the discriminator takes in the concatenation of the current and next observation
             hidden_layer_sizes=self.discriminator_cfg["hidden_dims"],
             reward_scale=self.discriminator_cfg["reward_scale"],
             device=self.device,
@@ -199,29 +220,19 @@ class AMPOnPolicyRunner:
         )
         self.num_steps_per_env = self.cfg["num_steps_per_env"]
         self.save_interval = self.cfg["save_interval"]
-        self.empirical_normalization = self.cfg["empirical_normalization"]
-        if self.empirical_normalization:
-            self.obs_normalizer = EmpiricalNormalization(
-                shape=[num_obs], until=1.0e8
-            ).to(self.device)
-            self.critic_obs_normalizer = EmpiricalNormalization(
-                shape=[num_critic_obs], until=1.0e8
-            ).to(self.device)
-        else:
-            self.obs_normalizer = torch.nn.Identity()  # no normalization
-            self.critic_obs_normalizer = torch.nn.Identity()  # no normalization
         # init storage and model
+        obs_template = observations.clone().detach().to(self.device)
         self.alg.init_storage(
             self.env.num_envs,
             self.num_steps_per_env,
-            [num_obs],
-            [num_critic_obs],
-            [self.env.num_actions],
+            obs_template,
+            (self.env.num_actions,),
         )
 
         # Log
         self.log_dir = log_dir
         self.writer = None
+        self.logger_type = None
         self.tot_timesteps = 0
         self.tot_time = 0
         self.current_learning_iteration = 0
@@ -301,11 +312,8 @@ class AMPOnPolicyRunner:
             self.env.episode_length_buf = torch.randint_like(
                 self.env.episode_length_buf, high=int(self.env.max_episode_length)
             )
-        obs, extras = self.env.get_observations()
-        amp_obs = extras["observations"]["amp"]
-        critic_obs = extras["observations"].get("critic", obs)
-        obs, critic_obs = obs.to(self.device), critic_obs.to(self.device)
-        amp_obs = amp_obs.to(self.device)
+        obs = self.env.get_observations().to(self.device)
+        amp_obs = obs["amp"].clone()
         self.train_mode()  # switch to train mode (for dropout for example)
 
         ep_infos = []
@@ -328,74 +336,63 @@ class AMPOnPolicyRunner:
             mean_task_reward_log = 0
 
             with torch.inference_mode():
-                for i in range(self.num_steps_per_env):
-                    actions = self.alg.act(obs, critic_obs)
+                for _ in range(self.num_steps_per_env):
+                    actions = self.alg.act(obs)
                     self.alg.act_amp(amp_obs)
-                    obs, rewards, dones, infos = self.env.step(actions)
-                    _, extras = self.env.get_observations()
-                    next_amp_obs = extras["observations"]["amp"]
-                    obs = self.obs_normalizer(obs)
-                    if "critic" in infos["observations"]:
-                        critic_obs = self.critic_obs_normalizer(
-                            infos["observations"]["critic"]
-                        )
-                    else:
-                        critic_obs = obs
-                    obs, critic_obs, rewards, dones = (
-                        obs.to(self.device),
-                        critic_obs.to(self.device),
-                        rewards.to(self.device),
-                        dones.to(self.device),
+                    obs, rewards, dones, extras = self.env.step(
+                        actions.to(self.env.device)
                     )
-                    next_amp_obs = next_amp_obs.to(self.device)
+                    obs = obs.to(self.device)
+                    rewards = rewards.to(self.device)
+                    dones = dones.to(self.device)
 
-                    # Process the AMP reward
+                    rewards = rewards.view(self.env.num_envs, -1).squeeze(-1)
+                    dones = dones.view(self.env.num_envs, -1).squeeze(-1)
+
+                    next_amp_obs = obs["amp"].clone()
                     style_rewards = self.discriminator.predict_reward(
                         amp_obs, next_amp_obs, normalizer=self.amp_normalizer
+                    )
+                    style_rewards = style_rewards.view(self.env.num_envs, -1).squeeze(
+                        -1
                     )
 
                     mean_task_reward_log += rewards.mean().item()
                     mean_style_reward_log += style_rewards.mean().item()
 
-                    # Combine the task and style rewards (TODO this can be a hyperparameters)
                     rewards = 0.5 * rewards + 0.5 * style_rewards
 
-                    self.alg.process_env_step(rewards, dones, infos)
+                    self.alg.process_env_step(obs, rewards, dones, extras)
                     self.alg.process_amp_step(next_amp_obs)
 
-                    # The next observation becomes the current observation for the next step
-                    amp_obs = torch.clone(next_amp_obs)
+                    amp_obs = next_amp_obs
 
                     if self.log_dir is not None:
-                        # Book keeping
-                        # note: we changed logging to use "log" instead of "episode" to avoid confusion with
-                        # different types of logging data (rewards, curriculum, etc.)
-                        if "episode" in infos:
-                            ep_infos.append(infos["episode"])
-                        elif "log" in infos:
-                            ep_infos.append(infos["log"])
+                        if "episode" in extras:
+                            ep_infos.append(extras["episode"])
+                        elif "log" in extras:
+                            ep_infos.append(extras["log"])
                         cur_reward_sum += rewards
                         cur_episode_length += 1
-                        new_ids = (dones > 0).nonzero(as_tuple=False)
-                        rewbuffer.extend(
-                            cur_reward_sum[new_ids][:, 0].cpu().numpy().tolist()
-                        )
-                        lenbuffer.extend(
-                            cur_episode_length[new_ids][:, 0].cpu().numpy().tolist()
-                        )
-                        cur_reward_sum[new_ids] = 0
-                        cur_episode_length[new_ids] = 0
+                        new_ids = torch.nonzero(dones, as_tuple=False)
+                        if new_ids.numel() > 0:
+                            env_indices = new_ids.view(-1)
+                            rewbuffer.extend(cur_reward_sum[env_indices].cpu().tolist())
+                            lenbuffer.extend(
+                                cur_episode_length[env_indices].cpu().tolist()
+                            )
+                            cur_reward_sum[env_indices] = 0
+                            cur_episode_length[env_indices] = 0
 
                 stop = time.time()
                 collection_time = stop - start
 
                 # Learning step
                 start = stop
-                self.alg.compute_returns(critic_obs)
+                self.alg.compute_returns(obs)
 
             mean_style_reward_log /= self.num_steps_per_env
             mean_task_reward_log /= self.num_steps_per_env
-            mean_total_reward_log = mean_style_reward_log + mean_task_reward_log
 
             (
                 mean_value_loss,
@@ -455,7 +452,10 @@ class AMPOnPolicyRunner:
                 else:
                     self.writer.add_scalar("Episode/" + key, value, locs["it"])
                     ep_string += f"""{f'Mean episode {key}:':>{pad}} {value:.4f}\n"""
-        mean_std = self.alg.actor_critic.std.mean()
+        if getattr(self.alg.actor_critic, "noise_std_type", "scalar") == "log":
+            mean_std_value = torch.exp(self.alg.actor_critic.log_std).mean()
+        else:
+            mean_std_value = self.alg.actor_critic.std.mean()
         fps = int(
             self.num_steps_per_env
             * self.env.num_envs
@@ -487,7 +487,9 @@ class AMPOnPolicyRunner:
         self.writer.add_scalar(
             "Loss/mean_kl_divergence", locs["mean_kl_divergence"], locs["it"]
         )
-        self.writer.add_scalar("Policy/mean_noise_std", mean_std.item(), locs["it"])
+        self.writer.add_scalar(
+            "Policy/mean_noise_std", mean_std_value.item(), locs["it"]
+        )
         self.writer.add_scalar("Perf/total_fps", fps, locs["it"])
         self.writer.add_scalar(
             "Perf/collection time", locs["collection_time"], locs["it"]
@@ -532,7 +534,7 @@ class AMPOnPolicyRunner:
                             'collection_time']:.3f}s, learning {locs['learn_time']:.3f}s)\n"""
                 f"""{'Value function loss:':>{pad}} {locs['mean_value_loss']:.4f}\n"""
                 f"""{'Surrogate loss:':>{pad}} {locs['mean_surrogate_loss']:.4f}\n"""
-                f"""{'Mean action noise std:':>{pad}} {mean_std.item():.2f}\n"""
+                f"""{'Mean action noise std:':>{pad}} {mean_std_value.item():.2f}\n"""
                 f"""{'Mean reward:':>{pad}} {statistics.mean(locs['rewbuffer']):.2f}\n"""
                 f"""{'Mean episode length:':>{pad}} {statistics.mean(locs['lenbuffer']):.2f}\n"""
             )
@@ -546,7 +548,7 @@ class AMPOnPolicyRunner:
                             'collection_time']:.3f}s, learning {locs['learn_time']:.3f}s)\n"""
                 f"""{'Value function loss:':>{pad}} {locs['mean_value_loss']:.4f}\n"""
                 f"""{'Surrogate loss:':>{pad}} {locs['mean_surrogate_loss']:.4f}\n"""
-                f"""{'Mean action noise std:':>{pad}} {mean_std.item():.2f}\n"""
+                f"""{'Mean action noise std:':>{pad}} {mean_std_value.item():.2f}\n"""
             )
             #   f"""{'Mean reward/step:':>{pad}} {locs['mean_reward']:.2f}\n"""
             #   f"""{'Mean episode length/episode:':>{pad}} {locs['mean_trajectory_length']:.2f}\n""")
@@ -582,11 +584,6 @@ class AMPOnPolicyRunner:
             "iter": self.current_learning_iteration,
             "infos": infos,
         }
-        if self.empirical_normalization:
-            saved_dict["obs_norm_state_dict"] = self.obs_normalizer.state_dict()
-            saved_dict["critic_obs_norm_state_dict"] = (
-                self.critic_obs_normalizer.state_dict()
-            )
         torch.save(saved_dict, path)
 
         # Upload model to external logging service
@@ -605,7 +602,7 @@ class AMPOnPolicyRunner:
 
             export_policy_as_onnx(
                 self.alg.actor_critic,
-                normalizer=self.obs_normalizer,
+                normalizer=None,
                 path=onnx_folder,
                 filename=onnx_model_name,
             )
@@ -624,11 +621,6 @@ class AMPOnPolicyRunner:
         self.alg.discriminator.load_state_dict(loaded_dict["discriminator_state_dict"])
         self.alg.amp_normalizer = loaded_dict["amp_normalizer"]
 
-        if self.empirical_normalization:
-            self.obs_normalizer.load_state_dict(loaded_dict["obs_norm_state_dict"])
-            self.critic_obs_normalizer.load_state_dict(
-                loaded_dict["critic_obs_norm_state_dict"]
-            )
         if load_optimizer:
             self.alg.optimizer.load_state_dict(loaded_dict["optimizer_state_dict"])
         self.current_learning_iteration = loaded_dict["iter"]
@@ -638,28 +630,15 @@ class AMPOnPolicyRunner:
         self.eval_mode()  # switch to evaluation mode (dropout for example)
         if device is not None:
             self.alg.actor_critic.to(device)
-        policy = self.alg.actor_critic.act_inference
-        if self.cfg["empirical_normalization"]:
-            if device is not None:
-                self.obs_normalizer.to(device)
-            policy = lambda x: self.alg.actor_critic.act_inference(
-                self.obs_normalizer(x)
-            )  # noqa: E731
-        return policy
+        return self.alg.actor_critic.act_inference
 
     def train_mode(self):
         self.alg.actor_critic.train()
         self.alg.discriminator.train()
-        if self.empirical_normalization:
-            self.obs_normalizer.train()
-            self.critic_obs_normalizer.train()
 
     def eval_mode(self):
         self.alg.actor_critic.eval()
         self.alg.discriminator.eval()
-        if self.empirical_normalization:
-            self.obs_normalizer.eval()
-            self.critic_obs_normalizer.eval()
 
     def add_git_repo_to_log(self, repo_file_path):
         self.git_status_repos.append(repo_file_path)
