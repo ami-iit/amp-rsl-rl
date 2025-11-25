@@ -20,6 +20,7 @@ from rsl_rl.env import VecEnv
 from rsl_rl.modules import ActorCritic, ActorCriticRecurrent, EmpiricalNormalization
 from rsl_rl.utils import resolve_obs_groups, store_code_state
 
+import amp_rsl_rl
 from amp_rsl_rl.utils import AMPLoader
 from amp_rsl_rl.algorithms import AMP_PPO
 from amp_rsl_rl.networks import Discriminator, ActorCriticMoE
@@ -139,22 +140,6 @@ class AMPOnPolicyRunner:
             observations, self.cfg.get("obs_groups"), default_sets
         )
 
-        if self.cfg.get("empirical_normalization") is not None:
-            warnings.warn(
-                "`empirical_normalization` on the runner is deprecated. "
-                "Set `actor_obs_normalization` and `critic_obs_normalization` "
-                "inside the policy configuration instead.",
-                DeprecationWarning,
-            )
-            if self.policy_cfg.get("actor_obs_normalization") is None:
-                self.policy_cfg["actor_obs_normalization"] = self.cfg[
-                    "empirical_normalization"
-                ]
-            if self.policy_cfg.get("critic_obs_normalization") is None:
-                self.policy_cfg["critic_obs_normalization"] = self.cfg[
-                    "empirical_normalization"
-                ]
-
         actor_critic_class = eval(self.policy_cfg.pop("class_name"))  # ActorCritic
         actor_critic: ActorCritic | ActorCriticRecurrent | ActorCriticMoE = (
             actor_critic_class(
@@ -236,7 +221,7 @@ class AMPOnPolicyRunner:
         self.tot_timesteps = 0
         self.tot_time = 0
         self.current_learning_iteration = 0
-        self.git_status_repos = [rsl_rl.__file__]
+        self.git_status_repos = [rsl_rl.__file__, amp_rsl_rl.__file__]
 
     def learn(self, num_learning_iterations: int, init_at_random_ep_len: bool = False):
         # initialize writer
@@ -346,15 +331,9 @@ class AMPOnPolicyRunner:
                     rewards = rewards.to(self.device)
                     dones = dones.to(self.device)
 
-                    rewards = rewards.view(self.env.num_envs, -1).squeeze(-1)
-                    dones = dones.view(self.env.num_envs, -1).squeeze(-1)
-
                     next_amp_obs = obs["amp"].clone()
                     style_rewards = self.discriminator.predict_reward(
                         amp_obs, next_amp_obs, normalizer=self.amp_normalizer
-                    )
-                    style_rewards = style_rewards.view(self.env.num_envs, -1).squeeze(
-                        -1
                     )
 
                     mean_task_reward_log += rewards.mean().item()
