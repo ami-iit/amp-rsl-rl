@@ -580,7 +580,7 @@ class AMPOnPolicyRunner:
 
             export_policy_as_onnx(
                 self.alg.actor_critic,
-                normalizer=None,
+                normalizer=self.alg.actor_critic.actor_obs_normalizer,
                 path=onnx_folder,
                 filename=onnx_model_name,
             )
