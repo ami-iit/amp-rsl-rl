@@ -33,8 +33,10 @@ keywords = ["reinforcement-learning", "robotics", "motion-priors", "ppo"]
 dependencies = [
     "numpy>=1.21.0",
     "scipy>=1.7.0",
-    "torch>=1.10.0",
-    "rsl-rl-lib>=2.3.0",
+    "rsl-rl-lib>=3.0.0",
+    "torch>=2.6.0",
+    "torchvision>=0.5.0",
+    "tensordict>=0.7.0",
 ]
 dynamic = ["version"]
 
