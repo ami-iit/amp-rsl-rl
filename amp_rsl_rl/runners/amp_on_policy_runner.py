@@ -9,7 +9,6 @@ from __future__ import annotations
 import os
 import statistics
 import time
-import warnings
 from collections import deque
 
 import torch
