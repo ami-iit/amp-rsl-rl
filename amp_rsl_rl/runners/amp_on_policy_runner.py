@@ -155,7 +155,7 @@ class AMPOnPolicyRunner:
 
         delta_t = self.env.cfg.sim.dt * self.env.cfg.decimation
 
-        # Initilize all the ingredients required for AMP (discriminator, dataset loader)
+        # Initialize all the ingredients required for AMP (discriminator, dataset loader)
         num_amp_obs = observations["amp"].shape[1]
         amp_data = AMPLoader(
             self.device,
