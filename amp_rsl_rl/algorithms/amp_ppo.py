@@ -45,7 +45,7 @@ class AMP_PPO:
     num_mini_batches : int, default=1
         Number of mini-batches to divide each epoch's data into.
     clip_param : float, default=0.2
-        PPO clipping parameter  that bounds the policy update step.
+        PPO clipping parameter that bounds the policy update step.
     gamma : float, default=0.998
         Discount factor.
     lam : float, default=0.95
