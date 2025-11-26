@@ -1,3 +1,8 @@
+# Copyright (c) 2025, Istituto Italiano di Tecnologia
+# All rights reserved.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
 from __future__ import annotations
 
 import torch

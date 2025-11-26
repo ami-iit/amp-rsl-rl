@@ -37,27 +37,27 @@ class AMP_PPO:
     discriminator : Discriminator
         AMP discriminator distinguishing expert vs policy motion pairs.
     amp_data : AMPLoader
-        Loader for expert motion data.
+        Data loader that provides batches of expert motion data.
     amp_normalizer : Optional[Any]
         Optional empirical normalizer applied to AMP observations prior to scoring.
     num_learning_epochs : int, default=1
         Number of passes over the rollout buffer per update.
     num_mini_batches : int, default=1
-        Mini-batches per epoch.
+        Number of mini-batches to divide each epoch's data into.
     clip_param : float, default=0.2
-        PPO clipping parameter.
+        PPO clipping parameter  that bounds the policy update step.
     gamma : float, default=0.998
         Discount factor.
     lam : float, default=0.95
-        GAE lambda.
+        Lambda parameter for Generalized Advantage Estimation (GAE).
     value_loss_coef : float, default=1.0
-        Weight of the value-function loss.
+        Coefficient for the value function loss term in the PPO loss.
     entropy_coef : float, default=0.0
-        Weight of the entropy bonus.
+        Coefficient for the entropy regularization term (encouraging exploration).
     learning_rate : float, default=1e-3
         Initial learning rate.
     max_grad_norm : float, default=1.0
-        Gradient clipping value.
+        Maximum gradient norm for clipping gradients during backpropagation.
     use_clipped_value_loss : bool, default=True
         Enables the clipped value loss variant of PPO.
     schedule : str, default="fixed"
