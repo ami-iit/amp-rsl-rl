@@ -47,10 +47,10 @@ class AMPOnPolicyRunner:
     - "policy": configuration for the policy network, including `"class_name"`
     - "algorithm": configuration for PPO/AMP_PPO, including `"class_name"`
     - "discriminator": configuration for the AMP discriminator
-    - "amp_data_path": path to folder containing expert dataset(s)
-    - "dataset_names": list of dataset filenames (without `.npy`)
-    - "dataset_weights": list of float weights used to sample from datasets
-    - "slow_down_factor": slowdown applied to real motion data to match sim dynamics
+    - "dataset": dictionary forwarded to `AMPLoader`, containing at least:
+        * "amp_data_path": folder with the `.npy` expert datasets
+        * "datasets": mapping of dataset name -> sampling weight (floats)
+        * "slow_down_factor": slowdown applied to real motion data to match sim dynamics
     - "num_steps_per_env": rollout horizon per environment
     - "save_interval": frequency (in iterations) for model checkpointing
     - "empirical_normalization": (deprecated) legacy flag mirrored to `policy.actor_obs_normalization`
@@ -130,6 +130,7 @@ class AMPOnPolicyRunner:
         self.alg_cfg = train_cfg["algorithm"]
         self.policy_cfg = train_cfg["policy"]
         self.discriminator_cfg = train_cfg["discriminator"]
+        self.dataset_cfg = train_cfg["dataset"]
         self.device = device
         self.env = env
 
@@ -153,18 +154,15 @@ class AMPOnPolicyRunner:
             "asset_cfg"
         ].joint_names
 
-        delta_t = self.env.cfg.sim.dt * self.env.cfg.decimation
-
         # Initialize all the ingredients required for AMP (discriminator, dataset loader)
         num_amp_obs = observations["amp"].shape[1]
         amp_data = AMPLoader(
-            self.device,
-            self.cfg["amp_data_path"],
-            self.cfg["dataset_names"],
-            self.cfg["dataset_weights"],
-            delta_t,
-            self.cfg["slow_down_factor"],
-            amp_joint_names,
+            device=self.device,
+            dataset_path_root=self.dataset_cfg["amp_data_path"],
+            datasets=self.dataset_cfg["datasets"],
+            simulation_dt=self.env.cfg.sim.dt * self.env.cfg.decimation,
+            slow_down_factor=self.dataset_cfg["slow_down_factor"],
+            expected_joint_names=amp_joint_names,
         )
 
         self.discriminator = Discriminator(

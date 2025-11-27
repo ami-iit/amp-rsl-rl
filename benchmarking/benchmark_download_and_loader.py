@@ -26,6 +26,9 @@ files = [
     "ergocub_walk_right2.npy",
 ]
 dataset_weights = [1.0] * len(files)
+
+# remove the "npy" extension from filenames to get dataset names
+datasets = {name[:-4]: weight for name, weight in zip(files, dataset_weights)}
 device_str = "cuda"  # or "cpu"
 simulation_dt = 1.0 / 60.0
 slow_down_factor = 1
@@ -72,8 +75,7 @@ def main():
         loader = AMPLoader(
             device=device,
             dataset_path_root=local_dir,
-            dataset_names=dataset_names,
-            dataset_weights=dataset_weights,
+            datasets=datasets,
             simulation_dt=simulation_dt,
             slow_down_factor=slow_down_factor,
             expected_joint_names=joint_names,

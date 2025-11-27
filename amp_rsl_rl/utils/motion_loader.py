@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from pathlib import Path
-from typing import List, Union, Tuple, Generator
+from typing import List, Union, Tuple, Generator, Dict
 from dataclasses import dataclass
 
 import torch
@@ -180,8 +180,7 @@ class AMPLoader:
     Args:
         device: Target torch device ('cpu' or 'cuda')
         dataset_path_root: Directory containing the .npy motion files
-        dataset_names: List of dataset filenames (no extension)
-        dataset_weights: List of sampling weights (for minibatch sampling)
+        datasets: Dictionary mapping dataset names to filenames
         simulation_dt: Timestep used by the simulator
         slow_down_factor: Integer factor to slow down original data
         expected_joint_names: (Optional) override for joint ordering
@@ -191,8 +190,7 @@ class AMPLoader:
         self,
         device: str,
         dataset_path_root: Path,
-        dataset_names: List[str],
-        dataset_weights: List[float],
+        datasets: Dict[str, float],
         simulation_dt: float,
         slow_down_factor: int,
         expected_joint_names: Union[List[str], None] = None,
@@ -200,6 +198,10 @@ class AMPLoader:
         self.device = device
         if isinstance(dataset_path_root, str):
             dataset_path_root = Path(dataset_path_root)
+
+        # ─── Parse dataset names and weights ───
+        dataset_names = list(datasets.keys())
+        dataset_weights = list(datasets.values())
 
         # ─── Build union of all joint names if not provided ───
         if expected_joint_names is None:
