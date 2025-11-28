@@ -16,7 +16,7 @@ from torch.utils.tensorboard import SummaryWriter as TensorboardSummaryWriter
 
 import rsl_rl
 from rsl_rl.env import VecEnv
-from rsl_rl.modules import ActorCritic, ActorCriticRecurrent, EmpiricalNormalization
+from rsl_rl.modules import ActorCritic, ActorCriticRecurrent
 from rsl_rl.utils import resolve_obs_groups, store_code_state
 
 import amp_rsl_rl
@@ -98,7 +98,7 @@ class AMPOnPolicyRunner:
     💾 Saving and ONNX export
     --------------------------
     At each `save_interval`, the runner:
-    - Saves the full state (`model`, `optimizer`, `discriminator`, `normalizer`, etc.)
+    - Saves the full state (`model`, `optimizer`, `discriminator`, etc.)
     - Optionally exports the policy as an ONNX model for deployment
     - Uploads checkpoints to logging services if enabled
 
@@ -167,13 +167,6 @@ class AMPOnPolicyRunner:
             amp_joint_names,
         )
 
-        self.amp_normalizer = (
-            None
-            if not self.discriminator_cfg["empirical_normalization"]
-            else EmpiricalNormalization(shape=[num_amp_obs], until=1.0e8).to(
-                self.device
-            )
-        )
         self.discriminator = Discriminator(
             input_dim=num_amp_obs
             * 2,  # the discriminator takes in the concatenation of the current and next observation
@@ -181,6 +174,7 @@ class AMPOnPolicyRunner:
             reward_scale=self.discriminator_cfg["reward_scale"],
             device=self.device,
             loss_type=self.discriminator_cfg["loss_type"],
+            empirical_normalization=self.discriminator_cfg["empirical_normalization"],
         ).to(self.device)
 
         # Initialize the PPO algorithm
@@ -198,7 +192,6 @@ class AMPOnPolicyRunner:
             actor_critic=actor_critic,
             discriminator=self.discriminator,
             amp_data=amp_data,
-            amp_normalizer=self.amp_normalizer,
             device=self.device,
             **self.alg_cfg,
         )
@@ -332,7 +325,7 @@ class AMPOnPolicyRunner:
 
                     next_amp_obs = obs["amp"].clone()
                     style_rewards = self.discriminator.predict_reward(
-                        amp_obs, next_amp_obs, normalizer=self.amp_normalizer
+                        amp_obs, next_amp_obs
                     )
 
                     mean_task_reward_log += rewards.mean().item()
@@ -558,7 +551,6 @@ class AMPOnPolicyRunner:
             "model_state_dict": self.alg.actor_critic.state_dict(),
             "optimizer_state_dict": self.alg.optimizer.state_dict(),
             "discriminator_state_dict": self.alg.discriminator.state_dict(),
-            "amp_normalizer": self.alg.amp_normalizer,
             "iter": self.current_learning_iteration,
             "infos": infos,
         }
@@ -596,9 +588,17 @@ class AMPOnPolicyRunner:
             path, map_location=self.device, weights_only=weights_only
         )
         self.alg.actor_critic.load_state_dict(loaded_dict["model_state_dict"])
-        self.alg.discriminator.load_state_dict(loaded_dict["discriminator_state_dict"])
-        self.alg.amp_normalizer = loaded_dict["amp_normalizer"]
+        discriminator_state = loaded_dict["discriminator_state_dict"]
+        self.alg.discriminator.load_state_dict(discriminator_state, strict=False)
 
+        amp_normalizer_module = loaded_dict.get("amp_normalizer")
+        if amp_normalizer_module is not None and getattr(
+            self.alg.discriminator, "empirical_normalization", False
+        ):
+            # Old checkpoints stored the empirical normalizer separately; hydrate it if present.
+            self.alg.discriminator.amp_normalizer.load_state_dict(
+                amp_normalizer_module.state_dict()
+            )
         if load_optimizer:
             self.alg.optimizer.load_state_dict(loaded_dict["optimizer_state_dict"])
         self.current_learning_iteration = loaded_dict["iter"]

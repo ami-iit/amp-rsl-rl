@@ -3,12 +3,12 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-from typing import Callable
-
 import torch
 import torch.nn as nn
 from torch import autograd
 from torch.nn import functional as F
+
+from rsl_rl.networks import EmpiricalNormalization
 
 
 class Discriminator(nn.Module):
@@ -26,6 +26,7 @@ class Discriminator(nn.Module):
         loss_type (str): Type of loss function to use ('BCEWithLogits' or 'Wasserstein').
         eta_wgan (float): Scaling factor for the Wasserstein loss (if used).
         use_minibatch_std (bool): Whether to use minibatch standard deviation in the network
+        empirical_normalization (bool): Whether to normalize AMP observations empirically before scoring.
     """
 
     def __init__(
@@ -38,6 +39,7 @@ class Discriminator(nn.Module):
         loss_type: str = "BCEWithLogits",
         eta_wgan: float = 0.3,
         use_minibatch_std: bool = True,
+        empirical_normalization: bool = False,
     ):
         super().__init__()
 
@@ -56,6 +58,13 @@ class Discriminator(nn.Module):
         self.trunk = nn.Sequential(*layers)
         final_in_dim = hidden_layer_sizes[-1] + (1 if use_minibatch_std else 0)
         self.linear = nn.Linear(final_in_dim, 1)
+
+        self.empirical_normalization = empirical_normalization
+        amp_obs_dim = input_dim // 2
+        if empirical_normalization:
+            self.amp_normalizer = EmpiricalNormalization(shape=[amp_obs_dim])
+        else:
+            self.amp_normalizer = nn.Identity()
 
         self.to(self.device)
         self.train()
@@ -81,6 +90,14 @@ class Discriminator(nn.Module):
         Returns:
             Tensor: Discriminator output logits/scores.
         """
+
+        # Normalize AMP observations. If not enabled the normalizer is identity.
+        # split state and next_state and apply normalization
+        state, next_state = torch.split(x, self.input_dim // 2, dim=-1)
+        state = self.amp_normalizer(state)
+        next_state = self.amp_normalizer(next_state)
+        x = torch.cat([state, next_state], dim=-1)
+
         h = self.trunk(x)
         if self.use_minibatch_std:
             s = self._minibatch_std_scalar(h)
@@ -98,23 +115,19 @@ class Discriminator(nn.Module):
         self,
         state: torch.Tensor,
         next_state: torch.Tensor,
-        normalizer: Callable[[torch.Tensor], torch.Tensor] | None = None,
     ) -> torch.Tensor:
         """Predicts reward based on discriminator output using a log-style formulation.
 
         Args:
             state (Tensor): Current state tensor.
             next_state (Tensor): Next state tensor.
-            normalizer (Callable | None): Optional callable applied to states prior to scoring.
 
         Returns:
             Tensor: Computed adversarial reward.
         """
         with torch.no_grad():
-            if normalizer is not None:
-                state = normalizer(state)
-                next_state = normalizer(next_state)
 
+            # No need to normalize here as normalization is done in forward()
             discriminator_logit = self.forward(torch.cat([state, next_state], dim=-1))
 
             if self.loss_type == "Wasserstein":
@@ -161,6 +174,22 @@ class Discriminator(nn.Module):
         expected = torch.ones_like(discriminator_output, device=self.device)
         return self.loss_fun(discriminator_output, expected)
 
+    def normalize_transition(
+        self, state: torch.Tensor, next_state: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Normalize a transition tuple (state, next_state) if enabled."""
+        if not self.empirical_normalization:
+            return state, next_state
+        return self.amp_normalizer(state), self.amp_normalizer(next_state)
+
+    def update_normalization(self, *batches: torch.Tensor) -> None:
+        """Update empirical statistics using provided AMP batches."""
+        if not self.empirical_normalization:
+            return
+        with torch.no_grad():
+            for batch in batches:
+                self.amp_normalizer.update(batch)
+
     def compute_loss(
         self,
         policy_d,
@@ -171,6 +200,8 @@ class Discriminator(nn.Module):
     ):
 
         # Compute gradient penalty to stabilize discriminator training.
+        sample_amp_expert = tuple(self.amp_normalizer(s) for s in sample_amp_expert)
+        sample_amp_policy = tuple(self.amp_normalizer(s) for s in sample_amp_policy)
         grad_pen_loss = self.compute_grad_pen(
             expert_states=sample_amp_expert,
             policy_states=sample_amp_policy,

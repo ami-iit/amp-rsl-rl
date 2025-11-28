@@ -38,8 +38,6 @@ class AMP_PPO:
         AMP discriminator distinguishing expert vs policy motion pairs.
     amp_data : AMPLoader
         Data loader that provides batches of expert motion data.
-    amp_normalizer : Optional[Any]
-        Optional empirical normalizer applied to AMP observations prior to scoring.
     num_learning_epochs : int, default=1
         Number of passes over the rollout buffer per update.
     num_mini_batches : int, default=1
@@ -79,7 +77,6 @@ class AMP_PPO:
         actor_critic: ActorCritic,
         discriminator: Discriminator,
         amp_data: AMPLoader,
-        amp_normalizer: Optional[Any],
         num_learning_epochs: int = 1,
         num_mini_batches: int = 1,
         clip_param: float = 0.2,
@@ -112,7 +109,6 @@ class AMP_PPO:
             obs_dim=obs_dim, buffer_size=amp_replay_buffer_size, device=device
         )
         self.amp_data: AMPLoader = amp_data
-        self.amp_normalizer: Optional[Any] = amp_normalizer
 
         # Set up the actor-critic (policy) and move it to the device.
         self.actor_critic = actor_critic
@@ -458,14 +454,6 @@ class AMP_PPO:
             expert_state_raw = expert_state.detach().clone()
             expert_next_state_raw = expert_next_state.detach().clone()
 
-            # Normalize AMP observations if a normalizer is provided.
-            if self.amp_normalizer is not None:
-                with torch.no_grad():
-                    policy_state = self.amp_normalizer(policy_state_raw)
-                    policy_next_state = self.amp_normalizer(policy_next_state_raw)
-                    expert_state = self.amp_normalizer(expert_state_raw)
-                    expert_next_state = self.amp_normalizer(expert_next_state_raw)
-
             # Concatenate policy and expert AMP observations for the discriminator input.
             B_pol = policy_state.size(0)
             discriminator_input = torch.cat(
@@ -483,7 +471,11 @@ class AMP_PPO:
 
             # Compute discriminator losses
             amp_loss, grad_pen_loss = self.discriminator.compute_loss(
-                policy_d, expert_d, sample_amp_expert, sample_amp_policy, lambda_=10
+                policy_d=policy_d,
+                expert_d=expert_d,
+                sample_amp_expert=(expert_state, expert_next_state),
+                sample_amp_policy=(policy_state, policy_next_state),
+                lambda_=10,
             )
 
             # The final loss combines the PPO loss with AMP losses.
@@ -496,18 +488,12 @@ class AMP_PPO:
             self.optimizer.step()
 
             # Update the normalizer with RAW (unnormalized) observations under no_grad
-            if self.amp_normalizer is not None:
-                with torch.no_grad():
-                    minibatch = torch.cat(
-                        [
-                            expert_state_raw,
-                            expert_next_state_raw,
-                            policy_state_raw,
-                            policy_next_state_raw,
-                        ],
-                        dim=0,
-                    )
-                    self.amp_normalizer.update(minibatch)
+            self.discriminator.update_normalization(
+                expert_state_raw,
+                expert_next_state_raw,
+                policy_state_raw,
+                policy_next_state_raw,
+            )
 
             # Compute probabilities from the discriminator logits.
             policy_d_prob = torch.sigmoid(policy_d)
