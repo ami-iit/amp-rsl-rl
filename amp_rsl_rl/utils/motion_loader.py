@@ -180,7 +180,7 @@ class AMPLoader:
     Args:
         device: Target torch device ('cpu' or 'cuda')
         dataset_path_root: Directory containing the .npy motion files
-        datasets: Dictionary mapping dataset names to filenames
+        datasets: Dictionary mapping dataset names (without extension) to sampling weights (floats)
         simulation_dt: Timestep used by the simulator
         slow_down_factor: Integer factor to slow down original data
         expected_joint_names: (Optional) override for joint ordering
