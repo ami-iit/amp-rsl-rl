@@ -165,6 +165,7 @@ class AMPOnPolicyRunner:
             delta_t,
             self.cfg["slow_down_factor"],
             amp_joint_names,
+            6.0,
         )
 
         self.discriminator = Discriminator(
