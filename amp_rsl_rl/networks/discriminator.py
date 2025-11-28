@@ -174,14 +174,6 @@ class Discriminator(nn.Module):
         expected = torch.ones_like(discriminator_output, device=self.device)
         return self.loss_fun(discriminator_output, expected)
 
-    def normalize_transition(
-        self, state: torch.Tensor, next_state: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Normalize a transition tuple (state, next_state) if enabled."""
-        if not self.empirical_normalization:
-            return state, next_state
-        return self.amp_normalizer(state), self.amp_normalizer(next_state)
-
     def update_normalization(self, *batches: torch.Tensor) -> None:
         """Update empirical statistics using provided AMP batches."""
         if not self.empirical_normalization:
