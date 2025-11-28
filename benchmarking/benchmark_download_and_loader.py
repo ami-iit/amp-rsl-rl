@@ -26,9 +26,6 @@ files = [
     "ergocub_walk_right2.npy",
 ]
 dataset_weights = [1.0] * len(files)
-
-# remove the "npy" extension from filenames to get dataset names
-datasets = {name[:-4]: weight for name, weight in zip(files, dataset_weights)}
 device_str = "cuda"  # or "cpu"
 simulation_dt = 1.0 / 60.0
 slow_down_factor = 1
@@ -69,6 +66,9 @@ def main():
             repo_id=repo_id,
         )
         print("Downloaded datasets:", dataset_names)
+
+        # Build datasets dictionary using returned dataset_names (without .npy extension)
+        datasets = {name: weight for name, weight in zip(dataset_names, dataset_weights)}
 
         # Initialize loader and measure time
         t0 = time.perf_counter()
