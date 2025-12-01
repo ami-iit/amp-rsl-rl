@@ -67,13 +67,15 @@ def main():
         )
         print("Downloaded datasets:", dataset_names)
 
+        # Build datasets dictionary using returned dataset_names (without .npy extension)
+        datasets = {name: weight for name, weight in zip(dataset_names, dataset_weights)}
+
         # Initialize loader and measure time
         t0 = time.perf_counter()
         loader = AMPLoader(
             device=device,
             dataset_path_root=local_dir,
-            dataset_names=dataset_names,
-            dataset_weights=dataset_weights,
+            datasets=datasets,
             simulation_dt=simulation_dt,
             slow_down_factor=slow_down_factor,
             expected_joint_names=joint_names,
