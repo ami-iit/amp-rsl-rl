@@ -230,7 +230,7 @@ class AMPOnPolicyRunner:
                     self.env.cfg, self.cfg, self.alg_cfg, self.policy_cfg
                 )
             elif self.logger_type == "wandb":
-                from rsl_rl.utils.wandb_utils import WandbSummaryWriter
+                from amp_rsl_rl.utils.wandb_utils import WandbSummaryWriter
                 import wandb
 
                 # Update the run name with a sequence number. This function is useful to
@@ -463,6 +463,8 @@ class AMPOnPolicyRunner:
         self.writer.add_scalar(
             "Perf/collection time", locs["collection_time"], locs["it"]
         )
+        if self.log_dir and self.logger_type == "wandb":
+            self.writer.add_video_files(self.log_dir, fps=30, step=locs["it"])
         self.writer.add_scalar("Perf/learning_time", locs["learn_time"], locs["it"])
         if len(locs["rewbuffer"]) > 0:
             self.writer.add_scalar(
