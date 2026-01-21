@@ -230,7 +230,7 @@ class AMPOnPolicyRunner:
                     self.env.cfg, self.cfg, self.alg_cfg, self.policy_cfg
                 )
             elif self.logger_type == "wandb":
-                from rsl_rl.utils.wandb_utils import WandbSummaryWriter
+                from amp_rsl_rl.utils.wandb_utils import WandbSummaryWriter
                 import wandb
 
                 # Update the run name with a sequence number. This function is useful to
