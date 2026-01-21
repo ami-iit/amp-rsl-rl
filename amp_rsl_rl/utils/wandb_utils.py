@@ -40,6 +40,11 @@ class WandbSummaryWriter(RslWandbSummaryWriter):
         # Add log directory to wandb
         wandb.config.update({"log_dir": log_dir})
 
+        self.name_map = {
+            "Train/mean_reward/time": "Train/mean_reward_time",
+            "Train/mean_episode_length/time": "Train/mean_episode_length_time",
+        }
+
         self.video_files = []
 
     # To save video files to wandb explicitly

@@ -270,7 +270,7 @@ class AMPOnPolicyRunner:
                 self.writer = WandbSummaryWriter(
                     log_dir=self.log_dir, flush_secs=10, cfg=self.cfg
                 )
-                update_run_name_with_sequence(prefix=self.cfg["wandb_project"])
+                update_run_name_with_sequence(prefix=self.cfg["wandb_kwargs"]["project"])
 
                 self.writer.log_config(
                     self.env.cfg, self.cfg, self.alg_cfg, self.policy_cfg
