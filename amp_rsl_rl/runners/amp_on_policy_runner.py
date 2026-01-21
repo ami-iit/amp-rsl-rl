@@ -464,7 +464,7 @@ class AMPOnPolicyRunner:
             "Perf/collection time", locs["collection_time"], locs["it"]
         )
         if self.log_dir and self.logger_type == "wandb":
-            self.writer.add_video_files(self.log_dir, fps=30, step=locs["it"])
+            self.writer.add_video_files(self.log_dir, step=locs["it"])
         self.writer.add_scalar("Perf/learning_time", locs["learn_time"], locs["it"])
         if len(locs["rewbuffer"]) > 0:
             self.writer.add_scalar(

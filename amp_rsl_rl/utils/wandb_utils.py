@@ -9,7 +9,7 @@ class WandbSummaryWriter(RslWandbSummaryWriter):
 
     # To save video files to wandb explicitly
     # Thanks to https://github.com/leggedrobotics/rsl_rl/pull/84    
-    def add_video_files(self, log_dir: str, step: int, fps: int = 30):
+    def add_video_files(self, log_dir: str, step: int):
         # Check if there are video files in the video directory
         if os.path.exists(log_dir):
             # append the new video files to the existing list
@@ -19,9 +19,10 @@ class WandbSummaryWriter(RslWandbSummaryWriter):
                         self.video_files.append(video_file)
                         # add the new video file to wandb only if video file is not updating
                         video_path = os.path.join(root, video_file)
+
+                        # Log video to wandb the fps is not required here since wandb reads
+                        # the fps from the video file itself
                         wandb.log(
-                            {"Video": wandb.Video(video_path, fps=fps, format="mp4")},
+                            {"Video": wandb.Video(video_path, format="mp4")},
                             step = step
                         )
-
-
