@@ -272,7 +272,6 @@ class AMPOnPolicyRunner:
                 )
                 update_run_name_with_sequence(prefix=self.cfg["wandb_project"])
 
-                wandb.gym.monitor()
                 self.writer.log_config(
                     self.env.cfg, self.cfg, self.alg_cfg, self.policy_cfg
                 )
