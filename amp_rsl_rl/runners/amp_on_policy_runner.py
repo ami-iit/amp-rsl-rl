@@ -272,7 +272,6 @@ class AMPOnPolicyRunner:
                 )
                 update_run_name_with_sequence(prefix=self.cfg["wandb_project"])
 
-                wandb.gym.monitor()
                 self.writer.log_config(
                     self.env.cfg, self.cfg, self.alg_cfg, self.policy_cfg
                 )
@@ -463,6 +462,8 @@ class AMPOnPolicyRunner:
         self.writer.add_scalar(
             "Perf/collection time", locs["collection_time"], locs["it"]
         )
+        if self.log_dir and self.logger_type == "wandb":
+            self.writer.add_video_files(self.log_dir, step=locs["it"])
         self.writer.add_scalar("Perf/learning_time", locs["learn_time"], locs["it"])
         if len(locs["rewbuffer"]) > 0:
             self.writer.add_scalar(
