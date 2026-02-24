@@ -62,6 +62,8 @@ class AMP_PPO:
         Either ``"fixed"`` or ``"adaptive"`` (based on KL).
     desired_kl : float, default=0.01
         Target KL divergence when using the adaptive schedule.
+    grad_penalty_coef : float
+        Gradient-penalty coefficient used in discriminator regularization.
     amp_replay_buffer_size : int, default=100_000
         Size of the replay buffer storing policy-generated AMP samples.
     use_smooth_ratio_clipping : bool, default=False
@@ -77,6 +79,7 @@ class AMP_PPO:
         actor_critic: ActorCritic,
         discriminator: Discriminator,
         amp_data: AMPLoader,
+        grad_penalty_coef: float,
         num_learning_epochs: int = 1,
         num_mini_batches: int = 1,
         clip_param: float = 0.2,
@@ -98,6 +101,7 @@ class AMP_PPO:
         self.desired_kl: float = desired_kl
         self.schedule: str = schedule
         self.learning_rate: float = learning_rate
+        self.grad_penalty_coef: float = grad_penalty_coef
 
         # Set up the discriminator and move it to the appropriate device.
         self.discriminator: Discriminator = discriminator.to(self.device)
@@ -475,7 +479,7 @@ class AMP_PPO:
                 expert_d=expert_d,
                 sample_amp_expert=(expert_state, expert_next_state),
                 sample_amp_policy=(policy_state, policy_next_state),
-                lambda_=10,
+                lambda_=self.grad_penalty_coef,
             )
 
             # The final loss combines the PPO loss with AMP losses.

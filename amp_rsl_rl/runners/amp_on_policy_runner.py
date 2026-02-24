@@ -190,6 +190,7 @@ class AMPOnPolicyRunner:
             actor_critic=actor_critic,
             discriminator=self.discriminator,
             amp_data=amp_data,
+            grad_penalty_coef=self.discriminator_cfg["grad_penalty_coef"],
             device=self.device,
             **self.alg_cfg,
         )
