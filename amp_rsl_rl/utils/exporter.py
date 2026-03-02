@@ -129,7 +129,7 @@ class _OnnxPolicyExporter(torch.nn.Module):
                 (obs, h_in, c_in),
                 os.path.join(path, filename),
                 export_params=True,
-                opset_version = 18  # was 11, but it caused problems with linux-aarch, and 18 worked well across all systems.
+                opset_version=18  # was 11, but it caused problems with linux-aarch, and 18 worked well across all systems.
                 verbose=self.verbose,
                 input_names=["obs", "h_in", "c_in"],
                 output_names=["actions", "h_out", "c_out"],
@@ -146,7 +146,7 @@ class _OnnxPolicyExporter(torch.nn.Module):
                 obs,
                 os.path.join(path, filename),
                 export_params=True,
-                opset_version = 18  # was 11, but it caused problems with linux-aarch, and 18 worked well across all systems.
+                opset_version=18  # was 11, but it caused problems with linux-aarch, and 18 worked well across all systems.
                 verbose=self.verbose,
                 input_names=["obs"],
                 output_names=["actions"],
