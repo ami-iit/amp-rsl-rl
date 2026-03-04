@@ -134,6 +134,7 @@ class _OnnxPolicyExporter(torch.nn.Module):
                 input_names=["obs", "h_in", "c_in"],
                 output_names=["actions", "h_out", "c_out"],
                 dynamic_axes={},
+                dynamo=False,
             )
         else:
             obs = (
@@ -151,4 +152,5 @@ class _OnnxPolicyExporter(torch.nn.Module):
                 input_names=["obs"],
                 output_names=["actions"],
                 dynamic_axes={},
+                dynamo=False,
             )
