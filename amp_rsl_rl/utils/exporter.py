@@ -129,11 +129,12 @@ class _OnnxPolicyExporter(torch.nn.Module):
                 (obs, h_in, c_in),
                 os.path.join(path, filename),
                 export_params=True,
-                opset_version=18  # see  https://github.com/isaac-sim/IsaacLab/blob/ddb044eb5b2300792de41e82d53b032f3632b489/source/isaaclab_rl/isaaclab_rl/rsl_rl/exporter.py#L172.
+                opset_version=18,  # see  https://github.com/isaac-sim/IsaacLab/blob/ddb044eb5b2300792de41e82d53b032f3632b489/source/isaaclab_rl/isaaclab_rl/rsl_rl/exporter.py#L172.
                 verbose=self.verbose,
                 input_names=["obs", "h_in", "c_in"],
                 output_names=["actions", "h_out", "c_out"],
                 dynamic_axes={},
+                dynamo=False,
             )
         else:
             obs = (
@@ -146,9 +147,10 @@ class _OnnxPolicyExporter(torch.nn.Module):
                 obs,
                 os.path.join(path, filename),
                 export_params=True,
-                opset_version=18  # see  https://github.com/isaac-sim/IsaacLab/blob/ddb044eb5b2300792de41e82d53b032f3632b489/source/isaaclab_rl/isaaclab_rl/rsl_rl/exporter.py#L172.
+                opset_version=18,  # see  https://github.com/isaac-sim/IsaacLab/blob/ddb044eb5b2300792de41e82d53b032f3632b489/source/isaaclab_rl/isaaclab_rl/rsl_rl/exporter.py#L172.
                 verbose=self.verbose,
                 input_names=["obs"],
                 output_names=["actions"],
                 dynamic_axes={},
+                dynamo=False,
             )
