@@ -27,7 +27,6 @@ from amp_rsl_rl.algorithms import AMP_PPO
 from amp_rsl_rl.networks import Discriminator, ActorCriticMoE
 from amp_rsl_rl.utils import export_policy_as_onnx
 
-
 # Built-in classes available for short-name resolution
 _BUILTIN_CLASSES = {
     "ActorCritic": ActorCritic,
@@ -65,9 +64,7 @@ def resolve_class(class_name: str) -> type:
             module = importlib.import_module(module_path)
             return getattr(module, cls_name)
         except (ImportError, AttributeError) as e:
-            raise ValueError(
-                f"Could not import class '{class_name}': {e}"
-            ) from e
+            raise ValueError(f"Could not import class '{class_name}': {e}") from e
 
     raise ValueError(
         f"Unknown class name '{class_name}'. Provide a fully-qualified "
@@ -323,8 +320,19 @@ class AMPOnPolicyRunner:
                 self.writer = WandbSummaryWriter(
                     log_dir=self.log_dir, flush_secs=10, cfg=self.cfg
                 )
-                update_run_name_with_sequence(prefix=self.cfg["wandb_kwargs"]["project"])
+                update_run_name_with_sequence(
+                    prefix=self.cfg["wandb_kwargs"]["project"]
+                )
 
+                self.writer.log_config(
+                    self.env.cfg, self.cfg, self.alg_cfg, self.policy_cfg
+                )
+            elif self.logger_type == "mlflow":
+                from amp_rsl_rl.utils.mlflow_utils import MLflowSummaryWriter
+
+                self.writer = MLflowSummaryWriter(
+                    log_dir=self.log_dir, flush_secs=10, cfg=self.cfg
+                )
                 self.writer.log_config(
                     self.env.cfg, self.cfg, self.alg_cfg, self.policy_cfg
                 )
@@ -438,7 +446,10 @@ class AMPOnPolicyRunner:
                 # obtain all the diff files
                 git_file_paths = store_code_state(self.log_dir, self.git_status_repos)
                 # if possible store them to wandb
-                if self.logger_type in ["wandb", "neptune"] and git_file_paths:
+                if (
+                    self.logger_type in ["wandb", "neptune", "mlflow"]
+                    and git_file_paths
+                ):
                     for path in git_file_paths:
                         self.writer.save_file(path)
 
@@ -515,7 +526,7 @@ class AMPOnPolicyRunner:
         self.writer.add_scalar(
             "Perf/collection time", locs["collection_time"], locs["it"]
         )
-        if self.log_dir and self.logger_type == "wandb":
+        if self.log_dir and self.logger_type in ("wandb", "mlflow"):
             self.writer.add_video_files(self.log_dir, step=locs["it"])
         self.writer.add_scalar("Perf/learning_time", locs["learn_time"], locs["it"])
         if len(locs["rewbuffer"]) > 0:
@@ -533,9 +544,10 @@ class AMPOnPolicyRunner:
             self.writer.add_scalar(
                 "Train/mean_task_reward", locs["mean_task_reward_log"], locs["it"]
             )
-            if (
-                self.logger_type != "wandb"
-            ):  # wandb does not support non-integer x-axis logging
+            if self.logger_type not in (
+                "wandb",
+                "mlflow",
+            ):  # wandb/mlflow do not support non-integer x-axis logging
                 self.writer.add_scalar(
                     "Train/mean_reward/time",
                     statistics.mean(locs["rewbuffer"]),
@@ -621,7 +633,7 @@ class AMPOnPolicyRunner:
         torch.save(saved_dict, path)
 
         # Upload model to external logging service
-        if self.logger_type in ["neptune", "wandb"]:
+        if self.logger_type in ["neptune", "wandb", "mlflow"]:
             self.writer.save_model(path, self.current_learning_iteration)
 
         if save_onnx:
@@ -642,7 +654,7 @@ class AMPOnPolicyRunner:
                 filename=onnx_model_name,
             )
 
-            if self.logger_type in ["neptune", "wandb"]:
+            if self.logger_type in ["neptune", "wandb", "mlflow"]:
                 self.writer.save_model(
                     os.path.join(onnx_folder, onnx_model_name),
                     self.current_learning_iteration,
