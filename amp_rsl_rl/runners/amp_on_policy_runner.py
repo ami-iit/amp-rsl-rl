@@ -6,10 +6,12 @@
 
 from __future__ import annotations
 
+import importlib
 import os
 import statistics
 import time
 from collections import deque
+from typing import Callable
 
 import torch
 from torch.utils.tensorboard import SummaryWriter as TensorboardSummaryWriter
@@ -24,6 +26,54 @@ from amp_rsl_rl.utils import AMPLoader
 from amp_rsl_rl.algorithms import AMP_PPO
 from amp_rsl_rl.networks import Discriminator, ActorCriticMoE
 from amp_rsl_rl.utils import export_policy_as_onnx
+
+
+# Built-in classes available for short-name resolution
+_BUILTIN_CLASSES = {
+    "ActorCritic": ActorCritic,
+    "ActorCriticRecurrent": ActorCriticRecurrent,
+    "ActorCriticMoE": ActorCriticMoE,
+    "AMP_PPO": AMP_PPO,
+}
+
+
+def resolve_class(class_name: str) -> type:
+    """Resolve a class by name.
+
+    Supports:
+    - Built-in short names: ``"ActorCritic"``, ``"ActorCriticMoE"``, etc.
+    - Fully-qualified dotted paths: ``"my_package.networks.MyClass"``.
+
+    Args:
+        class_name: Either a short built-in name or a fully-qualified
+            ``module.ClassName`` string.
+
+    Returns:
+        The resolved class object.
+
+    Raises:
+        ValueError: If the class cannot be resolved.
+    """
+    # 1. Check built-ins first (fast path, backward compat)
+    if class_name in _BUILTIN_CLASSES:
+        return _BUILTIN_CLASSES[class_name]
+
+    # 2. Try fully-qualified import  (e.g. "pkg.mod.ClassName")
+    if "." in class_name:
+        module_path, cls_name = class_name.rsplit(".", 1)
+        try:
+            module = importlib.import_module(module_path)
+            return getattr(module, cls_name)
+        except (ImportError, AttributeError) as e:
+            raise ValueError(
+                f"Could not import class '{class_name}': {e}"
+            ) from e
+
+    raise ValueError(
+        f"Unknown class name '{class_name}'. Provide a fully-qualified "
+        f"module path (e.g. 'my_package.module.{class_name}') or one of "
+        f"the built-in names: {list(_BUILTIN_CLASSES.keys())}."
+    )
 
 
 class AMPOnPolicyRunner:
@@ -134,13 +184,16 @@ class AMPOnPolicyRunner:
         self.device = device
         self.env = env
 
+        # Optional custom exporter function (set via set_export_policy_fn)
+        self._export_policy_fn: Callable | None = None
+
         observations = self.env.get_observations()
         default_sets = ["critic"]
         self.cfg["obs_groups"] = resolve_obs_groups(
             observations, self.cfg.get("obs_groups"), default_sets
         )
 
-        actor_critic_class = eval(self.policy_cfg.pop("class_name"))  # ActorCritic
+        actor_critic_class = resolve_class(self.policy_cfg.pop("class_name"))
         actor_critic: ActorCritic | ActorCriticRecurrent | ActorCriticMoE = (
             actor_critic_class(
                 observations,
@@ -176,7 +229,7 @@ class AMPOnPolicyRunner:
         ).to(self.device)
 
         # Initialize the PPO algorithm
-        alg_class = eval(self.alg_cfg.pop("class_name"))  # AMP_PPO
+        alg_class = resolve_class(self.alg_cfg.pop("class_name"))
         # This removes from alg_cfg fields that are not in AMP_PPO but are introduced in rsl_rl 2.2.3 PPO
         # normalize_advantage_per_mini_batch=False,
         # rnd_cfg: dict | None = None,
@@ -545,6 +598,18 @@ class AMPOnPolicyRunner:
         )
         print(log_string)
 
+    def set_export_policy_fn(self, fn: Callable) -> None:
+        """Set a custom function used to export the policy to ONNX.
+
+        The callable must have the signature::
+
+            fn(actor_critic, normalizer=..., path=..., filename=...)
+
+        If not set, the built-in ``export_policy_as_onnx`` from
+        ``amp_rsl_rl.utils`` is used.
+        """
+        self._export_policy_fn = fn
+
     def save(self, path, infos=None, save_onnx=False):
         saved_dict = {
             "model_state_dict": self.alg.actor_critic.state_dict(),
@@ -569,7 +634,8 @@ class AMPOnPolicyRunner:
             iteration = int(os.path.basename(path).split("_")[1].split(".")[0])
             onnx_model_name = f"policy_{iteration}.onnx"
 
-            export_policy_as_onnx(
+            _export_fn = self._export_policy_fn or export_policy_as_onnx
+            _export_fn(
                 self.alg.actor_critic,
                 normalizer=self.alg.actor_critic.actor_obs_normalizer,
                 path=onnx_folder,
